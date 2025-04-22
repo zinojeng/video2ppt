@@ -1,0 +1,48 @@
+{
+  "name": "video2ppt",
+  "defaultBranch": "main",
+  "formatOnSave": true,
+  "formatOnType": true,
+  "includedPaths": ["*.py", "*.md"],
+  "excludedPaths": ["venv/**", "slides/**"],
+  "settings": {
+    "python.formatting.provider": "black",
+    "python.linting.enabled": true,
+    "python.linting.pylintEnabled": true,
+    "python.linting.flake8Enabled": true,
+    "python.analysis.typeCheckingMode": "basic",
+    "editor.tabSize": 4,
+    "editor.insertSpaces": true,
+    "editor.detectIndentation": true,
+    "editor.rulers": [88],
+    "files.trimTrailingWhitespace": true,
+    "files.insertFinalNewline": true,
+    "python.analysis.extraPaths": ["."]
+  },
+  "aiSettings": {
+    "enableCompletion": true,
+    "enableChat": true
+  },
+  "language": {
+    "python": {
+      "formatter": "black",
+      "lineLength": 88
+    }
+  },
+  "customSettings": {
+    "chromeCapture": {
+      "defaultThreshold": 0.95,
+      "defaultInterval": 0.5,
+      "defaultOutputFormat": "pptx",
+      "autoSaveSlides": true,
+      "browserExecutablePath": "",
+      "userDataDir": ""
+    },
+    "captureSettings": {
+      "preferredScreenShotMethod": "pyautogui",
+      "fallbackMethod": "opencv",
+      "similarityAlgorithm": "ssim",
+      "slideDetectionStrategy": "structural_similarity"
+    }
+  }
+} 

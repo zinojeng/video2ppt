@@ -1,0 +1,10 @@
+opencv-python
+numpy
+pillow
+python-pptx
+scikit-image
+pyautogui
+selenium
+webdriver-manager
+# tkinter 通常是Python標準庫的一部分，不需要通過pip安裝
+# pyqt5 
