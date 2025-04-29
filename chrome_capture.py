@@ -89,7 +89,9 @@ class ChromeCapture:
                 # 從配置中獲取捕獲設置
                 if ('customSettings' in config and 
                         'captureSettings' in config['customSettings']):
-                    capture_settings = config['customSettings']['captureSettings']
+                    capture_settings = (
+                        config['customSettings']['captureSettings']
+                    )
                     self.screenshot_method = capture_settings.get(
                         'preferredScreenShotMethod', 'pyautogui')
                     self.fallback_method = capture_settings.get(
