@@ -10,7 +10,7 @@ import time
 import json
 import argparse
 import tkinter as tk
-from tkinter import messagebox, Scale
+from tkinter import messagebox, Scale, filedialog
 import numpy as np
 import cv2
 import pyautogui
@@ -19,8 +19,8 @@ from PIL import Image, ImageTk
 from skimage.metrics import structural_similarity as ssim
 from selenium import webdriver
 from selenium.webdriver.chrome.options import Options
-from selenium.webdriver.chrome.service import Service
-from webdriver_manager.chrome import ChromeDriverManager
+import subprocess
+import sys
 
 
 class ChromeCapture:
@@ -47,6 +47,8 @@ class ChromeCapture:
         self.roi_end = None
         self.display_size = None
         self.browser = None
+        self.last_change_time = time.time()  # 記錄最後一次檢測到變化的時間
+        self.inactivity_timeout = 5 * 60  # 預設5分鐘無變化自動停止（秒）
         
         # 確保輸出目錄存在
         if not os.path.exists(self.output_folder):
@@ -149,6 +151,13 @@ class ChromeCapture:
         )
         self.go_btn.pack(side=tk.LEFT, padx=5)
         
+        # 瀏覽器選擇區域按鈕 (初始狀態為隱藏)
+        self.browser_select_btn = tk.Button(
+            row0, text="在瀏覽器中選擇", command=self.select_area_in_browser,
+            bg="#FF9800", fg="white", width=12
+        )
+        # 開始時不顯示，等瀏覽器啟動後再顯示
+        
         # 第二行 - 設置
         row1 = tk.Frame(control_frame)
         row1.pack(fill=tk.X, pady=5)
@@ -168,6 +177,18 @@ class ChromeCapture:
         )
         self.interval_scale.set(self.interval)
         self.interval_scale.pack(side=tk.LEFT, padx=5)
+        
+        # 新增設置 - 無變化自動停止
+        row1_5 = tk.Frame(control_frame)
+        row1_5.pack(fill=tk.X, pady=5)
+        
+        tk.Label(row1_5, text="無變化自動停止(分鐘):").pack(side=tk.LEFT, padx=5)
+        self.timeout_scale = Scale(
+            row1_5, from_=1, to=30, resolution=1, 
+            orient=tk.HORIZONTAL, length=200
+        )
+        self.timeout_scale.set(self.inactivity_timeout // 60)  # 轉換秒為分鐘
+        self.timeout_scale.pack(side=tk.LEFT, padx=5)
         
         # 第三行 - 按鈕
         row2 = tk.Frame(control_frame)
@@ -243,47 +264,141 @@ class ChromeCapture:
         self.log_text.see(tk.END)
     
     def launch_browser(self):
-        """啟動Chrome瀏覽器並打開指定網址"""
         url = self.url_entry.get().strip()
         if not url:
-            messagebox.showerror("錯誤", "請輸入有效的網址")
+            self.log("請輸入有效的網址")
             return
         
+        # 檢查 URL 格式
+        if not url.startswith(('http://', 'https://')):
+            url = 'https://' + url
+            self.url_entry.delete(0, tk.END)
+            self.url_entry.insert(0, url)
+        
         try:
-            self.log(f"正在啟動Chrome瀏覽器並打開: {url}")
+            # 啟動 Chrome
+            if not self.browser:
+                chrome_options = Options()
+                chrome_options.add_argument("--start-maximized")
+                self.browser = webdriver.Chrome(options=chrome_options)
             
-            chrome_options = Options()
-            if self.user_data_dir:
-                chrome_options.add_argument(
-                    f"user-data-dir={self.user_data_dir}"
-                )
-            
-            # 添加其他選項
-            chrome_options.add_argument("--start-maximized")
-            
-            # 根據配置選擇Chrome路徑
-            if self.chrome_path:
-                service = Service(executable_path=self.chrome_path)
-                self.browser = webdriver.Chrome(
-                    service=service, options=chrome_options
-                )
-            else:
-                # 自動下載和使用ChromeDriver
-                service = Service(ChromeDriverManager().install())
-                self.browser = webdriver.Chrome(
-                    service=service, options=chrome_options
-                )
-            
-            # 打開網址
+            # 導航到網址
             self.browser.get(url)
             
-            # 截取當前瀏覽器畫面
+            # 顯示瀏覽器預覽
             self.show_browser_preview()
             
-            self.log("瀏覽器已啟動，請框選要監控的投影片區域")
+            # 顯示瀏覽器選擇按鈕
+            self.browser_select_btn.pack(side=tk.LEFT, padx=5)
+            
+            self.log("瀏覽器已啟動，請點擊「在瀏覽器中選擇」進行精確選擇")
         except Exception as e:
             self.log(f"啟動瀏覽器時出錯: {str(e)}")
-            messagebox.showerror("錯誤", f"啟動瀏覽器時出錯: {str(e)}")
+    
+    def select_area_in_browser(self):
+        """在瀏覽器中直接選擇擷取區域"""
+        try:
+            # 這裡暫時導入，是為了在使用時才檢查是否安裝
+            import pynput
+        except ImportError:
+            self.log("未安裝必要的套件: pynput，正在嘗試安裝...")
+            try:
+                subprocess.check_call(
+                    [sys.executable, "-m", "pip", "install", "pynput"]
+                )
+                self.log("安裝成功，請重新點擊「在瀏覽器中選擇」按鈕")
+                return
+            except Exception as e:
+                self.log(f"安裝失敗: {str(e)}，請手動安裝 pynput: pip install pynput")
+                return
+        
+        if not self.browser:
+            self.log("請先啟動瀏覽器")
+            return
+        
+        # 最小化應用程式視窗
+        self.log("正在準備瀏覽器區域選擇模式...")
+        self.log("請在瀏覽器視窗上按下滑鼠左鍵並拖曳來選擇區域")
+        self.log("完成選擇後，應用程式將自動恢復")
+        
+        # 給使用者時間準備
+        self.root.after(1000, self._start_browser_selection)
+    
+    def _start_browser_selection(self):
+        """開始瀏覽器區域選擇的實際過程"""
+        # 最小化應用程式視窗
+        self.root.iconify()
+        
+        # 確保瀏覽器視窗在前景
+        self.browser.maximize_window()
+        
+        try:
+            from pynput.mouse import Listener, Button
+            
+            # 用於儲存選擇的座標
+            selection_coords = {
+                'start_x': 0, 'start_y': 0, 
+                'end_x': 0, 'end_y': 0, 
+                'selecting': False
+            }
+            
+            def on_click(x, y, button, pressed):
+                if button == Button.left:
+                    if pressed:
+                        # 開始選擇
+                        selection_coords['start_x'] = x
+                        selection_coords['start_y'] = y
+                        selection_coords['selecting'] = True
+                    else:
+                        # 結束選擇
+                        if selection_coords['selecting']:
+                            selection_coords['end_x'] = x
+                            selection_coords['end_y'] = y
+                            selection_coords['selecting'] = False
+                            return False  # 停止監聽
+                elif button == Button.right:
+                    # 右鍵取消選擇
+                    return False
+                return True  # 繼續監聽
+            
+            # 啟動監聽器
+            with Listener(on_click=on_click) as listener:
+                listener.join()
+            
+            # 處理選擇結果
+            self.root.after(
+                500, 
+                lambda: self._process_browser_selection(selection_coords)
+            )
+        except Exception as e:
+            self.log(f"選擇過程中發生錯誤: {str(e)}")
+            self.root.deiconify()  # 恢復視窗
+    
+    def _process_browser_selection(self, coords):
+        """處理瀏覽器區域選擇的結果"""
+        # 恢復應用程式視窗
+        self.root.deiconify()
+        
+        # 確保選擇有效（開始點與結束點不同）
+        if (coords['start_x'] == coords['end_x'] or 
+                coords['start_y'] == coords['end_y']):
+            self.log("選擇無效，請重新選擇有效的區域")
+            return
+        
+        # 確保座標是遞增的
+        x1 = min(coords['start_x'], coords['end_x'])
+        y1 = min(coords['start_y'], coords['end_y'])
+        x2 = max(coords['start_x'], coords['end_x'])
+        y2 = max(coords['start_y'], coords['end_y'])
+        
+        # 設定 ROI
+        self.roi = (x1, y1, x2, y2)
+        
+        # 更新顯示
+        self.log(f"已設定選擇區域: ({x1}, {y1}) - ({x2}, {y2})")
+        
+        # 重新顯示預覽
+        self.show_browser_preview()
     
     def show_browser_preview(self):
         """顯示瀏覽器預覽"""
@@ -305,10 +420,10 @@ class ChromeCapture:
             messagebox.showerror("錯誤", f"無法獲取瀏覽器預覽: {str(e)}")
     
     def on_mouse_down(self, event):
-        if not self.is_running and not self.is_paused:
-            self.roi_selecting = True
-            self.roi_start = (event.x, event.y)
-            self.canvas.delete("roi")
+        # 檢查是否處於可選擇狀態，不管是否正在運行都可以重設選擇
+        self.roi_selecting = True
+        self.roi_start = (event.x, event.y)
+        self.canvas.delete("roi")
     
     def on_mouse_move(self, event):
         if self.roi_selecting:
@@ -332,18 +447,49 @@ class ChromeCapture:
             y2 = max(self.roi_start[1], self.roi_end[1])
             
             # 保存實際像素範圍
-            if hasattr(self, 'frame_size'):
+            if hasattr(self, 'frame_size') and hasattr(self, 'display_size'):
                 # 計算實際像素與顯示像素的比例
                 ratio_x = self.frame_size[0] / self.display_size[0]
                 ratio_y = self.frame_size[1] / self.display_size[1]
                 
                 # 計算實際像素位置
-                self.roi = (
-                    int(x1 * ratio_x), int(y1 * ratio_y),
-                    int(x2 * ratio_x), int(y2 * ratio_y)
-                )
+                real_x1 = int(x1 * ratio_x)
+                real_y1 = int(y1 * ratio_y)
+                real_x2 = int(x2 * ratio_x)
+                real_y2 = int(y2 * ratio_y)
+                
+                # 獲取畫布起始偏移量
+                canvas_width = self.canvas.winfo_width()
+                canvas_height = self.canvas.winfo_height()
+                offset_x = (canvas_width - self.display_size[0]) // 2
+                offset_y = (canvas_height - self.display_size[1]) // 2
+                
+                # 調整選擇區域以補償偏移量
+                if x1 >= offset_x and y1 >= offset_y:
+                    # 調整座標以考慮偏移
+                    adj_x1 = int((x1 - offset_x) * ratio_x)
+                    adj_y1 = int((y1 - offset_y) * ratio_y)
+                    adj_x2 = int((x2 - offset_x) * ratio_x)
+                    adj_y2 = int((y2 - offset_y) * ratio_y)
+                    self.roi = (adj_x1, adj_y1, adj_x2, adj_y2)
+                else:
+                    # 不調整，使用原始計算的座標
+                    self.roi = (real_x1, real_y1, real_x2, real_y2)
             else:
-                self.roi = (x1, y1, x2, y2)
+                # 如果沒有 frame_size 或 display_size，重新獲取螢幕截圖和尺寸
+                screenshot = pyautogui.screenshot()
+                frame = np.array(screenshot)
+                self.frame_size = (frame.shape[1], frame.shape[0])
+                
+                if hasattr(self, 'display_size'):
+                    ratio_x = self.frame_size[0] / self.display_size[0]
+                    ratio_y = self.frame_size[1] / self.display_size[1]
+                    self.roi = (
+                        int(x1 * ratio_x), int(y1 * ratio_y),
+                        int(x2 * ratio_x), int(y2 * ratio_y)
+                    )
+                else:
+                    self.roi = (x1, y1, x2, y2)
             
             self.canvas.delete("roi_temp")
             self.canvas.create_rectangle(
@@ -351,13 +497,28 @@ class ChromeCapture:
                 outline="green", width=2, tags="roi"
             )
             
-            self.log(f"已選擇區域: ({x1},{y1}) - ({x2},{y2})")
+            # 顯示實際像素座標而不是畫布座標
+            if self.roi:
+                rx1, ry1, rx2, ry2 = self.roi
+                self.log(f"已選擇區域: ({rx1},{ry1}) - ({rx2},{ry2}) [實際像素]")
     
     def reset_roi(self):
         self.roi = None
+        self.roi_start = None
+        self.roi_end = None
         self.canvas.delete("roi")
         self.log("已重設選擇區域")
-        self.show_browser_preview()
+        
+        # 重新顯示當前螢幕以便選擇新區域
+        if self.browser:
+            self.show_browser_preview()
+        else:
+            # 如果沒有瀏覽器，直接截取全螢幕
+            screenshot = pyautogui.screenshot()
+            frame = np.array(screenshot)
+            frame = cv2.cvtColor(frame, cv2.COLOR_RGB2BGR)
+            self.display_frame(frame)
+            self.frame_size = (frame.shape[1], frame.shape[0])
     
     def display_frame(self, frame):
         """顯示幀到畫布上"""
@@ -387,11 +548,18 @@ class ChromeCapture:
         # 保持引用以防垃圾回收
         self.current_image = img_tk
         
+        # 計算居中偏移量
+        offset_x = (canvas_width - new_width) // 2
+        offset_y = (canvas_height - new_height) // 2
+        
+        # 保存當前偏移量以供座標轉換使用
+        self.canvas_offset = (offset_x, offset_y)
+        
         # 更新畫布
         self.canvas.delete("frame")
         self.canvas.create_image(
-            canvas_width//2, canvas_height//2,
-            image=img_tk, anchor=tk.CENTER, tags="frame"
+            offset_x, offset_y,
+            image=img_tk, anchor=tk.NW, tags="frame"
         )
         
         # 如果有 ROI，重新繪製
@@ -408,7 +576,8 @@ class ChromeCapture:
             display_y2 = int(y2 * ratio_y)
             
             self.canvas.create_rectangle(
-                display_x1, display_y1, display_x2, display_y2,
+                display_x1 + offset_x, display_y1 + offset_y,
+                display_x2 + offset_x, display_y2 + offset_y,
                 outline="green", width=2, tags="roi"
             )
     
@@ -425,6 +594,49 @@ class ChromeCapture:
         # 獲取當前設置
         self.threshold = self.threshold_scale.get()
         self.interval = self.interval_scale.get()
+        self.inactivity_timeout = self.timeout_scale.get() * 60  # 將分鐘轉換為秒
+        self.last_change_time = time.time()  # 重設最後變化時間
+        
+        # 確認 ROI 座標在當前螢幕截圖上的有效性
+        try:
+            # 獲取最新的螢幕截圖
+            screenshot = pyautogui.screenshot()
+            frame = np.array(screenshot)
+            frame = cv2.cvtColor(frame, cv2.COLOR_RGB2BGR)
+            
+            # 更新螢幕尺寸
+            self.frame_size = (frame.shape[1], frame.shape[0])
+            
+            # 確保 ROI 區域在螢幕範圍內
+            x1, y1, x2, y2 = self.roi
+            screen_w, screen_h = self.frame_size
+            
+            if x1 < 0 or y1 < 0 or x2 > screen_w or y2 > screen_h:
+                self.log("警告：選擇的區域超出螢幕範圍，已自動調整")
+                x1 = max(0, min(x1, screen_w - 1))
+                y1 = max(0, min(y1, screen_h - 1))
+                x2 = max(0, min(x2, screen_w - 1))
+                y2 = max(0, min(y2, screen_h - 1))
+                
+                # 確保區域有足夠大小
+                if x2 - x1 < 10 or y2 - y1 < 10:
+                    messagebox.showerror("錯誤", "選擇的區域太小，請重新選擇")
+                    return
+                
+                self.roi = (x1, y1, x2, y2)
+            
+            # 顯示最新的一幀帶 ROI 的預覽
+            preview_frame = frame.copy()
+            self.display_current_roi(preview_frame)
+            self.root.after(10, lambda: self.display_frame(preview_frame))
+            
+            # 記錄實際捕獲區域
+            self.log(f"實際捕獲區域: ({x1},{y1}) - ({x2},{y2})")
+            
+        except Exception as e:
+            self.log(f"獲取螢幕截圖時出錯: {str(e)}")
+            messagebox.showerror("錯誤", f"獲取螢幕截圖時出錯: {str(e)}")
+            return
         
         self.is_running = True
         self.is_paused = False
@@ -441,7 +653,9 @@ class ChromeCapture:
         self.capture_thread.daemon = True
         self.capture_thread.start()
         
-        self.log(f"開始捕獲投影片 (閾值: {self.threshold}, 間隔: {self.interval}秒)")
+        msg = f"開始捕獲投影片 (閾值: {self.threshold}, 間隔: {self.interval}秒, "
+        msg += f"無變化自動停止: {self.inactivity_timeout//60}分鐘)"
+        self.log(msg)
         self.status_var.set("正在捕獲")
     
     def capture_loop(self):
@@ -463,6 +677,12 @@ class ChromeCapture:
                     # 剪切 ROI 區域
                     if self.roi:
                         x1, y1, x2, y2 = self.roi
+                        # 確保座標不超出範圍
+                        h, w = frame.shape[:2]
+                        x1 = max(0, min(x1, w-1))
+                        y1 = max(0, min(y1, h-1))
+                        x2 = max(0, min(x2, w-1))
+                        y2 = max(0, min(y2, h-1))
                         roi_frame = frame[y1:y2, x1:x2]
                         
                         # 檢查是否需要保存
@@ -470,6 +690,7 @@ class ChromeCapture:
                             # 第一幀直接保存
                             self.save_slide(roi_frame)
                             self.last_frame = roi_frame
+                            self.last_change_time = time.time()  # 初始化最後變化時間
                         else:
                             # 計算相似度
                             if self.similarity_algorithm == 'ssim':
@@ -494,12 +715,26 @@ class ChromeCapture:
                                     gray_last, gray_current, full=True
                                 )
                                 
-                                self.status_var.set(f"相似度: {score:.4f}")
+                                # 檢查無變化時間
+                                current_time = time.time()
+                                time_since_last_change = current_time - self.last_change_time
+                                minutes = int(time_since_last_change // 60)
+                                seconds = int(time_since_last_change % 60)
+                                
+                                status_text = f"相似度: {score:.4f} | 無變化時間: {minutes}分{seconds}秒"
+                                self.status_var.set(status_text)
+                                
+                                # 檢查是否超過無變化自動停止時間
+                                if time_since_last_change > self.inactivity_timeout:
+                                    self.log(f"已檢測到 {minutes}分{seconds}秒 無變化，自動停止捕獲")
+                                    self.root.after(0, self.stop_capture)
+                                    break
                                 
                                 # 如果幀有明顯變化，保存
                                 if score < self.threshold:
                                     self.save_slide(roi_frame)
                                     self.last_frame = roi_frame
+                                    self.last_change_time = current_time  # 更新最後變化時間
                     
                     # 在UI中顯示
                     self.root.after(
@@ -516,6 +751,12 @@ class ChromeCapture:
         """在預覽幀上顯示當前ROI區域"""
         if self.roi:
             x1, y1, x2, y2 = self.roi
+            # 確保座標不超出範圍
+            h, w = frame.shape[:2]
+            x1 = max(0, min(x1, w-1))
+            y1 = max(0, min(y1, h-1))
+            x2 = max(0, min(x2, w-1))
+            y2 = max(0, min(y2, h-1))
             cv2.rectangle(frame, (x1, y1), (x2, y2), (0, 255, 0), 2)
     
     def save_slide(self, frame):
