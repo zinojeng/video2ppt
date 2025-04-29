@@ -807,9 +807,14 @@ class ChromeCapture:
         """生成PowerPoint文件"""
         try:
             from pptx import Presentation
+            from pptx.util import Inches
             
-            # 創建演示文稿對象
+            # 創建演示文稿對象 - 使用16:9比例
             prs = Presentation()
+            
+            # 設置幻燈片尺寸為16:9 (寬度10英寸, 高度5.625英寸)
+            prs.slide_width = Inches(10)
+            prs.slide_height = Inches(5.625)
             
             # 檢查投影片目錄中的PNG文件
             slides = sorted([
@@ -852,8 +857,8 @@ class ChromeCapture:
             output_path = self.output_file
             prs.save(output_path)
             
-            self.log(f"已生成PowerPoint文件: {output_path}")
-            messagebox.showinfo("成功", f"已生成PowerPoint文件: {output_path}")
+            self.log(f"已生成16:9格式PowerPoint文件: {output_path}")
+            messagebox.showinfo("成功", f"已生成16:9格式PowerPoint文件: {output_path}")
             
         except Exception as e:
             self.log(f"生成PowerPoint時出錯: {str(e)}")
