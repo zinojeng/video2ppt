@@ -48,7 +48,8 @@ class ChromeCapture:
         self.display_size = None
         self.browser = None
         self.last_change_time = time.time()  # 記錄最後一次檢測到變化的時間
-        self.inactivity_timeout = 5 * 60  # 預設5分鐘無變化自動停止（秒）
+        self.inactivity_timeout = 2 * 60  # 預設2分鐘無變化自動停止（秒）
+        self.auto_stop_enabled = True  # 是否啟用自動停止功能
         
         # 確保輸出目錄存在
         if not os.path.exists(self.output_folder):
@@ -184,11 +185,19 @@ class ChromeCapture:
         
         tk.Label(row1_5, text="無變化自動停止(分鐘):").pack(side=tk.LEFT, padx=5)
         self.timeout_scale = Scale(
-            row1_5, from_=1, to=30, resolution=1, 
+            row1_5, from_=0, to=30, resolution=1, 
             orient=tk.HORIZONTAL, length=200
         )
         self.timeout_scale.set(self.inactivity_timeout // 60)  # 轉換秒為分鐘
         self.timeout_scale.pack(side=tk.LEFT, padx=5)
+        
+        # 添加自動停止功能啟用/禁用選項
+        self.auto_stop_var = tk.BooleanVar(value=self.auto_stop_enabled)
+        self.auto_stop_checkbox = tk.Checkbutton(
+            row1_5, text="啟用自動停止", variable=self.auto_stop_var,
+            command=self.toggle_auto_stop
+        )
+        self.auto_stop_checkbox.pack(side=tk.LEFT, padx=5)
         
         # 第三行 - 按鈕
         row2 = tk.Frame(control_frame)
@@ -594,6 +603,7 @@ class ChromeCapture:
         # 獲取當前設置
         self.threshold = self.threshold_scale.get()
         self.interval = self.interval_scale.get()
+        self.auto_stop_enabled = self.auto_stop_var.get()
         self.inactivity_timeout = self.timeout_scale.get() * 60  # 將分鐘轉換為秒
         self.last_change_time = time.time()  # 重設最後變化時間
         
@@ -653,8 +663,11 @@ class ChromeCapture:
         self.capture_thread.daemon = True
         self.capture_thread.start()
         
-        msg = f"開始捕獲投影片 (閾值: {self.threshold}, 間隔: {self.interval}秒, "
-        msg += f"無變化自動停止: {self.inactivity_timeout//60}分鐘)"
+        msg = f"開始捕獲投影片 (閾值: {self.threshold}, 間隔: {self.interval}秒"
+        if self.auto_stop_enabled and self.inactivity_timeout > 0:
+            msg += f", 無變化自動停止: {self.inactivity_timeout//60}分鐘)"
+        else:
+            msg += ", 自動停止功能已禁用)"
         self.log(msg)
         self.status_var.set("正在捕獲")
     
@@ -725,7 +738,9 @@ class ChromeCapture:
                                 self.status_var.set(status_text)
                                 
                                 # 檢查是否超過無變化自動停止時間
-                                if time_since_last_change > self.inactivity_timeout:
+                                if (self.auto_stop_enabled and 
+                                    self.inactivity_timeout > 0 and 
+                                    time_since_last_change > self.inactivity_timeout):
                                     self.log(f"已檢測到 {minutes}分{seconds}秒 無變化，自動停止捕獲")
                                     self.root.after(0, self.stop_capture)
                                     break
@@ -863,6 +878,12 @@ class ChromeCapture:
         except Exception as e:
             self.log(f"生成PowerPoint時出錯: {str(e)}")
             messagebox.showerror("錯誤", f"生成PowerPoint時出錯: {str(e)}")
+    
+    def toggle_auto_stop(self):
+        """啟用或禁用自動停止功能"""
+        self.auto_stop_enabled = self.auto_stop_var.get()
+        self.timeout_scale.config(state=tk.NORMAL if self.auto_stop_enabled else tk.DISABLED)
+        self.log(f"自動停止功能已{'啟用' if self.auto_stop_enabled else '禁用'}")
     
     def run(self):
         """運行主循環"""
