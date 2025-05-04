@@ -9,6 +9,9 @@ import sys
 import tkinter as tk
 from tkinter import messagebox
 import traceback
+import os
+import subprocess
+import importlib
 
 
 def check_dependencies():
@@ -22,7 +25,19 @@ def check_dependencies():
     
     for package in required_packages:
         try:
-            __import__(package.replace("-", "_"))
+            # 處理特殊套件名稱
+            import_name = package.replace("-", "_")
+            # 處理 opencv-python 特例
+            if package == "opencv-python":
+                import_name = "cv2"
+            # 處理 python-pptx 特例
+            elif package == "python-pptx":
+                import_name = "pptx"
+            # 處理 pillow 特例
+            elif package == "pillow":
+                import_name = "PIL"
+                
+            importlib.import_module(import_name)
         except ImportError:
             missing_packages.append(package)
     
@@ -31,7 +46,6 @@ def check_dependencies():
 
 def install_dependencies(packages):
     """安裝缺失的依賴"""
-    import subprocess
     print(f"正在安裝必要依賴: {', '.join(packages)}")
     
     try:

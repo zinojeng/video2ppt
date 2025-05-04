@@ -27,7 +27,7 @@ def check_dependencies():
     ]
     
     # 分開檢查 markitdown，因為它可能需要特殊處理
-    optional_packages = ["markitdown"]
+    optional_packages = ["markitdown", "google-generativeai"]
     
     missing_packages = []
     missing_optional = []
@@ -55,7 +55,11 @@ def check_dependencies():
     
     for package in optional_packages:
         try:
-            __import__(package)
+            if package == "google-generativeai":
+                import_name = "google.generativeai"
+            else:
+                import_name = package
+            __import__(import_name)
         except ImportError:
             missing_optional.append(package)
     
@@ -63,6 +67,8 @@ def check_dependencies():
         print(f"注意: 未安裝可選套件: {', '.join(missing_optional)}")
         print("如果您想使用 MarkItDown 處理功能，請安裝:")
         print("pip install markitdown>=0.1.1")
+        print("如果您想使用 Google Gemini API，請安裝:")
+        print("pip install google-generativeai")
     
     return missing_packages
 
@@ -163,9 +169,10 @@ def process_with_image_analyzer(
     slides_folder, 
     output_file=None, 
     api_key=None, 
-    model="o4-mini"
+    model="o4-mini",
+    provider="openai"
 ):
-    """使用 OpenAI 視覺模型直接分析圖片內容"""
+    """使用 OpenAI、Gemini 或 DeepSeek 模型分析圖片內容"""
     try:
         from image_analyzer import analyze_image
         
@@ -185,23 +192,37 @@ def process_with_image_analyzer(
         
         # 如果沒有指定輸出檔案，創建預設檔案名稱
         if not output_file:
+            provider_name = provider.lower()
             output_file = os.path.join(
                 os.path.dirname(slides_folder), 
-                "slides_openai_analysis.md"
+                f"slides_{provider_name}_analysis.md"
             )
             
         # 確保 API Key 存在
-        current_api_key = api_key or os.environ.get("OPENAI_API_KEY")
+        api_key_env_vars = {
+            "openai": "OPENAI_API_KEY",
+            "gemini": "GOOGLE_API_KEY",
+            "deepseek": "DEEPSEEK_API_KEY"
+        }
+        env_var = api_key_env_vars.get(provider.lower(), "OPENAI_API_KEY")
+        current_api_key = api_key or os.environ.get(env_var)
+            
         if not current_api_key:
             messagebox.showwarning(
                 "警告", 
-                "未提供 OpenAI API Key，無法進行圖片分析"
+                f"未提供 {provider.upper()} API Key，無法進行圖片分析"
             )
             return False
             
         # 創建 Markdown 檔案
         with open(output_file, 'w', encoding='utf-8') as f:
-            f.write("# 投影片內容 OpenAI 視覺分析\n\n")
+            provider_display = {
+                "openai": "OpenAI",
+                "gemini": "Google Gemini",
+                "deepseek": "DeepSeek"
+            }.get(provider.lower(), provider.upper())
+            
+            f.write(f"# 投影片內容 {provider_display} 視覺分析\n\n")
             
             # 處理每張圖片
             success_count = 0
@@ -214,7 +235,8 @@ def process_with_image_analyzer(
                 success, analysis = analyze_image(
                     image_path=img_path,
                     api_key=current_api_key,
-                    model=model
+                    model=model,
+                    provider=provider
                 )
                 
                 if success:
@@ -257,6 +279,9 @@ class EnhancedChromeCapture:
         self.image_preview = None
         self.image_cache = []  # 添加圖片緩存列表，防止圖片被垃圾回收
         
+        # 保存使用者的 API Key
+        self.saved_api_key = os.environ.get("OPENAI_API_KEY", "")
+        
         # 創建頁面框架
         self.setup_ui()
     
@@ -286,6 +311,21 @@ class EnhancedChromeCapture:
         
         # 設置分析模式 UI
         self.setup_analyze_ui()
+        
+        # 添加標籤頁切換事件處理
+        self.notebook.bind("<<NotebookTabChanged>>", self.on_tab_changed)
+    
+    def on_tab_changed(self, event):
+        """處理標籤頁切換事件"""
+        # 獲取當前選中的標籤頁索引
+        current_tab = self.notebook.index('current')
+        
+        # 如果切換到分析已選擇投影片標籤頁，將保存的 API Key 填入
+        if current_tab == 2:  # 分析已選擇投影片頁面
+            # 如果 API Key 欄位為空但有保存的值，則填入
+            if not self.api_key_entry.get() and self.saved_api_key:
+                self.api_key_entry.delete(0, tk.END)
+                self.api_key_entry.insert(0, self.saved_api_key)
     
     def setup_capture_ui(self):
         """設置捕獲模式 UI"""
@@ -393,7 +433,7 @@ class EnhancedChromeCapture:
         folder_frame.pack(fill=tk.X, pady=10)
         
         tk.Label(folder_frame, text="投影片資料夾:").pack(side=tk.LEFT, padx=10)
-        self.folder_entry = tk.Entry(folder_frame, width=50)
+        self.folder_entry = tk.Entry(folder_frame, width=40)
         self.folder_entry.pack(side=tk.LEFT, padx=5, fill=tk.X, expand=True)
         self.folder_entry.insert(0, "selected_slides")  # 預設資料夾
         
@@ -403,18 +443,53 @@ class EnhancedChromeCapture:
         )
         self.browse_btn.pack(side=tk.LEFT, padx=5)
         
+        # 添加從「選擇投影片」匯入按鈕
+        self.import_btn = tk.Button(
+            folder_frame, text="從「選擇投影片」匯入", 
+            command=self.import_from_selection,
+            bg="#FFC107", fg="black"
+        )
+        self.import_btn.pack(side=tk.LEFT, padx=5)
+        
         # API Key 設置
         api_frame = tk.Frame(frame)
         api_frame.pack(fill=tk.X, pady=10)
         
-        tk.Label(api_frame, text="OpenAI API Key:").pack(side=tk.LEFT, padx=10)
-        self.api_key_entry = tk.Entry(api_frame, width=50)
+        tk.Label(api_frame, text="API Key:").pack(side=tk.LEFT, padx=10)
+        self.api_key_entry = tk.Entry(api_frame, width=40)
         self.api_key_entry.pack(side=tk.LEFT, padx=5, fill=tk.X, expand=True)
         
         # 從環境變數獲取 API Key
         api_key_env = os.environ.get("OPENAI_API_KEY", "")
         if api_key_env:
             self.api_key_entry.insert(0, api_key_env)
+            self.saved_api_key = api_key_env
+        
+        # API 提供者選擇
+        provider_frame = tk.Frame(frame)
+        provider_frame.pack(fill=tk.X, pady=10)
+        
+        tk.Label(provider_frame, text="API 提供者:").pack(side=tk.LEFT, padx=10)
+        
+        self.provider_var = tk.StringVar(value="openai")
+        
+        tk.Radiobutton(
+            provider_frame, text="OpenAI", 
+            variable=self.provider_var, value="openai",
+            command=self.update_model_options
+        ).pack(side=tk.LEFT, padx=5)
+        
+        tk.Radiobutton(
+            provider_frame, text="Gemini", 
+            variable=self.provider_var, value="gemini",
+            command=self.update_model_options
+        ).pack(side=tk.LEFT, padx=5)
+        
+        tk.Radiobutton(
+            provider_frame, text="DeepSeek", 
+            variable=self.provider_var, value="deepseek",
+            command=self.update_model_options
+        ).pack(side=tk.LEFT, padx=5)
         
         # 模型選擇
         model_frame = tk.Frame(frame)
@@ -423,9 +498,24 @@ class EnhancedChromeCapture:
         tk.Label(model_frame, text="使用模型:").pack(side=tk.LEFT, padx=10)
         
         self.model_var = tk.StringVar(value="gpt-4o-mini")
-        models = ["gpt-4o-mini", "gpt-4o", "o4-mini", "o4"]
+        self.openai_models = ["gpt-4o-mini", "gpt-4o", "o4-mini", "o4"]
+        self.gemini_models = [
+            "gemini-2.5-pro", 
+            "gemini-2.5-flash", 
+            "gemini-pro", 
+            "gemini-flash"
+        ]
+        self.deepseek_models = [
+            "deepseek-chat", 
+            "deepseek-reasoner", 
+            "DeepSeek-V3-0324"
+        ]
+        
         self.model_menu = ttk.Combobox(
-            model_frame, textvariable=self.model_var, values=models, width=15
+            model_frame, 
+            textvariable=self.model_var, 
+            values=self.openai_models, 
+            width=20
         )
         self.model_menu.pack(side=tk.LEFT, padx=5)
         
@@ -466,7 +556,7 @@ class EnhancedChromeCapture:
         ).pack(side=tk.LEFT, padx=5)
         
         tk.Radiobutton(
-            method_frame, text="使用 OpenAI 視覺模型", 
+            method_frame, text="使用視覺模型", 
             variable=self.method_var, value="openai"
         ).pack(side=tk.LEFT, padx=5)
         
@@ -479,6 +569,20 @@ class EnhancedChromeCapture:
             bg="#4CAF50", fg="white", height=2, width=15
         )
         self.process_btn.pack(pady=10)
+    
+    def update_model_options(self):
+        """根據選擇的 API 提供者更新模型選項"""
+        provider = self.provider_var.get()
+        
+        if provider == "deepseek":
+            self.model_menu.config(values=self.deepseek_models)
+            self.model_var.set(self.deepseek_models[0])
+        elif provider == "gemini":
+            self.model_menu.config(values=self.gemini_models)
+            self.model_var.set(self.gemini_models[0])
+        else:  # OpenAI
+            self.model_menu.config(values=self.openai_models)
+            self.model_var.set(self.openai_models[0])
     
     def browse_folder(self, entry_widget):
         """瀏覽並選擇資料夾"""
@@ -696,8 +800,17 @@ class EnhancedChromeCapture:
             def on_capture_close():
                 """當原始捕獲工具關閉時"""
                 try:
-                    # 先保存捕獲窗口的狀態
-                    capture_has_slides = app.slide_count > 0
+                    # 檢查是否已捕獲投影片（檢查輸出目錄是否有圖片）
+                    slides_folder = "slides"
+                    capture_has_slides = False
+                    if os.path.exists(slides_folder):
+                        # 檢查是否有圖片檔案
+                        for file in os.listdir(slides_folder):
+                            if file.lower().endswith(
+                                ('.png', '.jpg', '.jpeg')
+                            ):
+                                capture_has_slides = True
+                                break
                     
                     # 關閉捕獲窗口
                     capture_root.destroy()
@@ -707,7 +820,6 @@ class EnhancedChromeCapture:
                     self.root.update()
                     
                     # 如果有新捕獲的投影片，填充到資料夾輸入框
-                    slides_folder = "slides"
                     if (os.path.exists(slides_folder) and 
                             os.listdir(slides_folder)):
                         self.select_folder_entry.delete(0, tk.END)
@@ -745,6 +857,19 @@ class EnhancedChromeCapture:
             # 恢復主窗口
             self.root.deiconify()
     
+    def import_from_selection(self):
+        """從選擇投影片頁面匯入資料夾路徑"""
+        if hasattr(self, 'select_folder_entry'):
+            selected_folder = self.select_folder_entry.get()
+            if selected_folder and os.path.exists(selected_folder):
+                self.folder_entry.delete(0, tk.END)
+                self.folder_entry.insert(0, selected_folder)
+                messagebox.showinfo("成功", f"已匯入資料夾路徑: {selected_folder}")
+            else:
+                messagebox.showwarning("警告", "選擇投影片頁面未指定有效的資料夾")
+        else:
+            messagebox.showwarning("警告", "無法獲取選擇投影片頁面資訊")
+    
     def process_slides(self):
         """處理選擇的投影片資料夾"""
         folder = self.folder_entry.get()
@@ -752,6 +877,11 @@ class EnhancedChromeCapture:
         model = self.model_var.get()
         output_format = self.format_var.get()
         method = self.method_var.get()
+        provider = self.provider_var.get()
+        
+        # 保存 API Key 到實例變量中
+        if api_key:
+            self.saved_api_key = api_key
         
         if not os.path.exists(folder):
             messagebox.showwarning("警告", f"資料夾不存在: {folder}")
@@ -762,8 +892,15 @@ class EnhancedChromeCapture:
             if process_captured_slides(folder, output_format, api_key, model):
                 messagebox.showinfo("完成", "投影片處理已完成")
         else:
-            # 使用 OpenAI 視覺模型處理
-            if process_with_image_analyzer(folder, None, api_key, model):
+            # 使用視覺模型處理
+            success = process_with_image_analyzer(
+                folder, 
+                None,  # 輸出檔案路徑，將自動生成
+                api_key, 
+                model, 
+                provider
+            )
+            if success:
                 messagebox.showinfo("完成", "投影片分析已完成")
     
     def run(self):

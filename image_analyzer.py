@@ -12,8 +12,11 @@ import os
 import re
 import base64
 import logging
+import time
 from typing import Dict, List, Optional, Tuple, Any
 from urllib.parse import urlparse, unquote
+from io import BytesIO
+from PIL import Image
 
 # 設定日誌
 logging.basicConfig(
@@ -37,42 +40,66 @@ def is_url(path: str) -> bool:
     return parsed.scheme in ('http', 'https')
 
 
-def encode_image_to_base64(image_path: str) -> Optional[str]:
-    """
-    將圖片轉換為 Base64 編碼
-    
-    Args:
-        image_path (str): 圖片檔案路徑
-    
-    Returns:
-        Optional[str]: Base64 編碼的圖片，失敗時返回 None
-    """
+def encode_image_to_base64(image_path: str) -> str:
+    """將圖片編碼為 base64 格式"""
     try:
         with open(image_path, "rb") as image_file:
             return base64.b64encode(image_file.read()).decode('utf-8')
     except Exception as e:
-        logger.error(f"轉換圖片 {image_path} 為 Base64 時出錯: {e}")
-        return None
+        logger.error(f"編碼圖片失敗: {e}")
+        return ""
+
+
+def compress_image(image_path: str, max_size_mb: float = 1.0) -> str:
+    """嘗試壓縮圖片並返回 base64 編碼"""
+    try:
+        # 檢查原始檔案大小
+        file_size = os.path.getsize(image_path) / (1024 * 1024)  # 轉換為 MB
+        if file_size <= max_size_mb:
+            return ""  # 不需要壓縮
+            
+        # 載入圖片
+        img = Image.open(image_path)
+        
+        # 計算壓縮比例
+        quality = min(90, int(max_size_mb / file_size * 100))
+        quality = max(50, quality)  # 確保品質不低於 50
+        
+        # 壓縮圖片
+        buffer = BytesIO()
+        img.save(buffer, format="JPEG", quality=quality)
+        buffer.seek(0)
+        
+        # 轉換為 Base64
+        base64_str = base64.b64encode(buffer.read()).decode('utf-8')
+        
+        logger.info(f"已壓縮圖片，品質: {quality}%")
+        return base64_str
+    except Exception as e:
+        logger.warning(f"壓縮圖片失敗: {e}")
+        return ""
 
 
 def analyze_image(
     image_path: str,
     api_key: str,
-    model: str = "o4-mini"
+    model: str = "o4-mini",
+    provider: str = "openai"
 ) -> Tuple[bool, str]:
     """
-    使用 OpenAI API 分析圖片內容
+    使用 OpenAI 或 DeepSeek API 分析圖片內容
     
     Args:
         image_path (str): 圖片檔案路徑
-        api_key (str): OpenAI API Key
-        model (str): 使用的 OpenAI 模型
+        api_key (str): API Key (OpenAI 或 DeepSeek)
+        model (str): 使用的模型名稱
+        provider (str): API 提供者，可為 'openai' 或 'deepseek'
     
     Returns:
         Tuple[bool, str]: (是否成功, 分析結果)
     """
     try:
-        # 嘗試導入 OpenAI
+        # 嘗試導入所需模組
         try:
             from openai import OpenAI
         except ImportError:
@@ -85,64 +112,132 @@ def analyze_image(
             return False, f"圖片不存在: {image_path}"
         
         # 檢查圖片大小
-        file_size = os.path.getsize(image_path) / (1024 * 1024)  # 轉換為 MB
+        file_size = os.path.getsize(image_path) / (1024 * 1024)  # MB
         if file_size > 20:
-            logger.warning(f"圖片 {image_path} 太大 ({file_size:.2f}MB)，超過 API 限制")
+            logger.warning(f"圖片太大 ({file_size:.2f}MB)，超過 API 限制")
             return False, f"圖片太大 ({file_size:.2f}MB)，超過 API 限制"
+        
+        # 清理 API 金鑰（移除可能的換行符和空白）
+        api_key = api_key.strip() if api_key else ""
         
         # 轉換圖片為 Base64
         base64_image = encode_image_to_base64(image_path)
         if not base64_image:
             return False, "無法轉換圖片為 Base64 格式"
         
-        # 建立 OpenAI 客戶端
-        client = OpenAI(api_key=api_key)
+        # 如果圖片大於 1MB，嘗試壓縮
+        if file_size > 1:
+            compressed = compress_image(image_path)
+            if compressed:
+                base64_image = compressed
         
-        # 建立請求
-        response = client.chat.completions.create(
-            model=model,
-            messages=[
-                {
-                    "role": "system",
-                    "content": (
-                        "你是一個專業的圖片分析和描述專家。你的工作是詳細分析圖片內容，"
-                        "提供準確且有深度的描述。請使用繁體中文回應。"
-                        "\n\n描述應包含：\n"
-                        "1. 總體概述：簡明扼要說明圖片主要內容\n"
-                        "2. 詳細分析：包括主要元素、場景、人物、文字等\n"
-                        "3. 圖片目的或用途（如果明顯）\n"
-                        "4. 若圖片包含文字，請在描述中引用關鍵文字\n\n"
-                        "請以流暢的段落形式提供分析，而非列表。分析需專業、客觀、準確。"
-                    )
-                },
-                {
-                    "role": "user",
-                    "content": [
-                        {
-                            "type": "text", 
-                            "text": "請詳細分析並描述這張圖片。"
-                        },
-                        {
-                            "type": "image_url",
-                            "image_url": {
-                                "url": f"data:image/jpeg;base64,{base64_image}"
-                            }
-                        }
-                    ]
-                }
-            ],
-            temperature=0.5,
-            max_completion_tokens=1000
+        # 建立系統提示
+        system_prompt = (
+            "你是一個專業的圖片分析和描述專家。你的工作是詳細分析圖片內容，"
+            "提供準確且有深度的描述。請使用繁體中文回應。"
+            "\n\n描述應包含：\n"
+            "1. 總體概述：簡明扼要說明圖片主要內容\n"
+            "2. 詳細分析：包括主要元素、場景、人物、文字等\n"
+            "3. 圖片目的或用途（如果明顯）\n"
+            "4. 若圖片包含文字，請在描述中引用關鍵文字\n\n"
+            "請以流暢的段落形式提供分析，而非列表。分析需專業、客觀、準確。"
         )
         
-        analysis = response.choices[0].message.content
-        return True, analysis
+        # 最多重試次數和延遲
+        max_retries = 2
+        retry_delay = 3  # 重試間隔秒數
+        
+        for attempt in range(max_retries + 1):
+            try:
+                if provider.lower() == "deepseek":
+                    # DeepSeek API 目前不支援圖片分析功能
+                    logger.info("DeepSeek 模型不支援圖片分析，使用預設模板")
+                    
+                    # 返回一個標準模板，而不嘗試發送圖片
+                    template = """
+這是一個投影片內容分析模板。DeepSeek API 目前不支援視覺分析功能。
+
+標準投影片分析通常包含以下元素：
+1. 投影片標題和主題概述 
+2. 主要內容和關鍵訊息摘要
+3. 圖表、數據或可視化元素的解釋
+4. 專業術語或縮寫的解釋
+5. 上下文相關的背景資訊
+
+若需進行實際的視覺內容分析，建議：
+- 切換至支援視覺分析的 OpenAI API
+- 手動記錄投影片中的關鍵內容
+- 使用支援圖像識別的其他服務
+
+此回應為預設模板，因 DeepSeek API 目前僅支援純文本處理。
+"""
+                    return True, template.strip()
+                else:
+                    # 使用 OpenAI API
+                    client = OpenAI(api_key=api_key)
+                    
+                    # 建立請求訊息列表
+                    messages = [
+                        {"role": "system", "content": system_prompt},
+                        {
+                            "role": "user",
+                            "content": [
+                                {"type": "text", "text": "請分析並描述這張圖片。"},
+                                {
+                                    "type": "image_url",
+                                    "image_url": {
+                                        "url": (
+                                            f"data:image/jpeg;base64,"
+                                            f"{base64_image}"
+                                        )
+                                    }
+                                }
+                            ]
+                        }
+                    ]
+                    
+                    # 動態構建請求參數
+                    request_kwargs = {
+                        "model": model,
+                        "messages": messages,
+                    }
+                    
+                    # 根據模型類型添加可選參數
+                    if model.startswith("gpt-4o"):
+                        request_kwargs["temperature"] = 0.5
+                        request_kwargs["max_tokens"] = 1000
+                    
+                    # 發送請求
+                    logger.info(f"使用 OpenAI 模型: {model}")
+                    response = client.chat.completions.create(**request_kwargs)
+                
+                # 成功獲取響應
+                analysis = response.choices[0].message.content
+                return True, analysis
+                
+            except Exception as e:
+                error_msg = str(e)
+                logger.error(f"嘗試 {attempt+1}/{max_retries+1} 失敗: {error_msg}")
+                
+                if "429" in error_msg and attempt < max_retries:
+                    # 速率限制錯誤，等待後重試
+                    wait_time = retry_delay * (attempt + 1)
+                    logger.warning(f"API 速率限制，等待 {wait_time} 秒後重試...")
+                    time.sleep(wait_time)
+                elif attempt < max_retries:
+                    # 其他錯誤，也嘗試重試
+                    logger.warning(f"請求失敗，等待 {retry_delay} 秒後重試...")
+                    time.sleep(retry_delay)
+                else:
+                    # 已達最大重試次數，拋出異常
+                    raise
+        
+        # 不應該到達這裡，但為了安全添加
+        return False, "分析失敗，請稍後再試"
         
     except Exception as e:
-        logger.error(f"分析圖片 {image_path} 時出錯: {e}")
-        import traceback
-        logger.error(traceback.format_exc())
-        return False, f"分析圖片時出錯: {str(e)}"
+        logger.error(f"API 調用異常: {str(e)}")
+        return False, f"API 調用異常: {str(e)}"
 
 
 def find_markdown_images(markdown_text: str) -> List[Dict[str, Any]]:

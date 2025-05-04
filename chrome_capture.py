@@ -159,6 +159,9 @@ class ChromeCapture:
         self.url_entry = tk.Entry(row0, width=50)
         self.url_entry.pack(side=tk.LEFT, padx=5, fill=tk.X, expand=True)
         
+        # 為網址輸入框創建右鍵菜單
+        self.create_entry_context_menu(self.url_entry)
+        
         self.go_btn = tk.Button(
             row0, text="打開瀏覽器", command=self.launch_browser, 
             bg="#2196F3", fg="white", width=12
@@ -1117,6 +1120,45 @@ class ChromeCapture:
             if self.browser:
                 self.browser.quit()
             self.root.destroy()
+
+    def create_entry_context_menu(self, entry):
+        """為輸入框創建右鍵菜單"""
+        # 創建右鍵菜單
+        menu = tk.Menu(self.root, tearoff=0)
+        menu.add_command(label="剪下", command=lambda: self.entry_cut(entry))
+        menu.add_command(label="複製", command=lambda: self.entry_copy(entry))
+        menu.add_command(label="貼上", command=lambda: self.entry_paste(entry))
+        menu.add_separator()
+        menu.add_command(label="全選", command=lambda: self.entry_select_all(entry))
+        
+        # 綁定右鍵事件
+        if sys.platform.startswith('darwin'):  # macOS
+            entry.bind("<Button-2>", lambda e: self.show_context_menu(e, menu))
+        else:  # Windows/Linux
+            entry.bind("<Button-3>", lambda e: self.show_context_menu(e, menu))
+    
+    def show_context_menu(self, event, menu):
+        """顯示右鍵菜單"""
+        try:
+            menu.tk_popup(event.x_root, event.y_root)
+        finally:
+            menu.grab_release()
+    
+    def entry_cut(self, entry):
+        """剪下選擇的文字"""
+        entry.event_generate("<<Cut>>")
+    
+    def entry_copy(self, entry):
+        """複製選擇的文字"""
+        entry.event_generate("<<Copy>>")
+    
+    def entry_paste(self, entry):
+        """貼上文字"""
+        entry.event_generate("<<Paste>>")
+    
+    def entry_select_all(self, entry):
+        """全選輸入框內容"""
+        entry.select_range(0, tk.END)
 
 
 def main():
