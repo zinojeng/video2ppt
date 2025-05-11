@@ -545,6 +545,20 @@ class EnhancedChromeCapture:
             variable=self.method_var, value="openai"
         ).pack(side=tk.LEFT, padx=5)
         
+        # Word 模板選擇
+        template_frame = tk.Frame(frame)
+        template_frame.pack(fill=tk.X, pady=10)
+        
+        tk.Label(template_frame, text="Word 模板:").pack(side=tk.LEFT, padx=10)
+        self.template_entry = tk.Entry(template_frame, width=40)
+        self.template_entry.pack(side=tk.LEFT, padx=5, fill=tk.X, expand=True)
+        
+        self.template_browse_btn = tk.Button(
+            template_frame, text="瀏覽...", 
+            command=lambda: self.browse_docx_template(self.template_entry)
+        )
+        self.template_browse_btn.pack(side=tk.LEFT, padx=5)
+        
         # 按鈕區域
         btn_frame = tk.Frame(frame)
         btn_frame.pack(fill=tk.X, pady=20)
@@ -867,6 +881,18 @@ class EnhancedChromeCapture:
         else:
             messagebox.showwarning("警告", "無法獲取選擇投影片頁面資訊")
     
+    def browse_docx_template(self, entry_widget):
+        """瀏覽並選擇 Word 模板檔案"""
+        file_path = filedialog.askopenfilename(
+            initialdir=(os.path.dirname(entry_widget.get()) 
+                      if entry_widget.get() else os.getcwd()),
+            title="選擇 Word 模板檔案",
+            filetypes=(("Word 檔案", "*.docx"), ("所有檔案", "*.*"))
+        )
+        if file_path:
+            entry_widget.delete(0, tk.END)
+            entry_widget.insert(0, file_path)
+    
     def process_slides(self):
         """處理選擇的投影片"""
         # 獲取選項
@@ -876,6 +902,7 @@ class EnhancedChromeCapture:
         provider = self.provider_var.get()  # 獲取提供者選項
         method = self.method_var.get()  # 獲取處理方式：markitdown 或 openai
         output_format = self.format_var.get()  # 獲取輸出格式
+        template_path = self.template_entry.get().strip()  # 獲取 Word 模板路徑
         
         # 檢查輸入
         if not folder_path:
@@ -998,9 +1025,20 @@ class EnhancedChromeCapture:
                     
                 try:
                     from markdown_converter import convert_markdown_to_docx
-                    docx_path = os.path.splitext(markdown_file_path)[0] + ".docx"
+                    docx_path = os.path.splitext(markdown_file_path)[0] + \
+                        ".docx"
                     
-                    if convert_markdown_to_docx(markdown_file_path, docx_path):
+                    # 檢查是否指定了模板
+                    reference_docx = None
+                    if template_path and os.path.exists(template_path):
+                        reference_docx = template_path
+                    
+                    if convert_markdown_to_docx(
+                        markdown_file_path, 
+                        docx_path,
+                        reference_docx=reference_docx,
+                        apply_styles=True
+                    ):
                         self.show_message(
                             "成功",
                             f"已將 Markdown 轉換為 Word 檔案: {docx_path}",
