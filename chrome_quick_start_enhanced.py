@@ -27,7 +27,7 @@ def check_dependencies():
     ]
     
     # 分開檢查 markitdown，因為它可能需要特殊處理
-    optional_packages = ["markitdown", "google-generativeai"]
+    optional_packages = ["markitdown", "google-genai"]
     
     missing_packages = []
     missing_optional = []
@@ -55,7 +55,7 @@ def check_dependencies():
     
     for package in optional_packages:
         try:
-            if package == "google-generativeai":
+            if package == "google-genai":
                 import_name = "google.generativeai"
             else:
                 import_name = package
@@ -68,7 +68,7 @@ def check_dependencies():
         print("如果您想使用 MarkItDown 處理功能，請安裝:")
         print("pip install markitdown>=0.1.1")
         print("如果您想使用 Google Gemini API，請安裝:")
-        print("pip install google-generativeai")
+        print("pip install google-genai")
     
     return missing_packages
 
@@ -500,6 +500,7 @@ class EnhancedChromeCapture:
         self.model_var = tk.StringVar(value="gpt-4o-mini")
         self.openai_models = ["gpt-4o-mini", "gpt-4o", "o4-mini", "o4"]
         self.gemini_models = [
+            "gemini-2.5-pro-exp-03-25",
             "gemini-2.5-pro", 
             "gemini-2.5-flash", 
             "gemini-pro", 
@@ -510,6 +511,9 @@ class EnhancedChromeCapture:
             "deepseek-reasoner", 
             "DeepSeek-V3-0324"
         ]
+        
+        # 定義 Gemini 模型列表，並輸出以供調試
+        print("初始化 Gemini 模型列表:", self.gemini_models)
         
         self.model_menu = ttk.Combobox(
             model_frame, 
@@ -569,20 +573,36 @@ class EnhancedChromeCapture:
             bg="#4CAF50", fg="white", height=2, width=15
         )
         self.process_btn.pack(pady=10)
+        
+        # 初始化模型選項
+        print("初始化模型選項...")
+        self.update_model_options()
     
     def update_model_options(self):
         """根據選擇的 API 提供者更新模型選項"""
         provider = self.provider_var.get()
         
+        print(f"更新模型選項，選擇的提供者: {provider}")
+        
         if provider == "deepseek":
+            print("DeepSeek 模型列表:", self.deepseek_models)
             self.model_menu.config(values=self.deepseek_models)
             self.model_var.set(self.deepseek_models[0])
         elif provider == "gemini":
+            print("Gemini 模型列表:", self.gemini_models)
             self.model_menu.config(values=self.gemini_models)
             self.model_var.set(self.gemini_models[0])
         else:  # OpenAI
+            print("OpenAI 模型列表:", self.openai_models)
             self.model_menu.config(values=self.openai_models)
             self.model_var.set(self.openai_models[0])
+            
+        # 確認 Combobox 的值是否已更新
+        print(f"下拉選單當前值: {self.model_menu['values']}")
+        print(f"當前選中的模型: {self.model_var.get()}")
+        
+        # 強制更新下拉選單
+        self.model_menu.update()
     
     def browse_folder(self, entry_widget):
         """瀏覽並選擇資料夾"""
