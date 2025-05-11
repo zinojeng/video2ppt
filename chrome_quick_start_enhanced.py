@@ -518,8 +518,13 @@ class EnhancedChromeCapture:
         ).pack(side=tk.LEFT, padx=5)
         
         tk.Radiobutton(
-            format_frame, text="兩者都要", 
-            variable=self.format_var, value="both"
+            format_frame, text="僅 Word (.docx)", 
+            variable=self.format_var, value="docx"
+        ).pack(side=tk.LEFT, padx=5)
+        
+        tk.Radiobutton(
+            format_frame, text="全部 (MD, PPTX, DOCX)", 
+            variable=self.format_var, value="all"
         ).pack(side=tk.LEFT, padx=5)
         
         # 處理方式選擇
@@ -869,6 +874,8 @@ class EnhancedChromeCapture:
         api_key = self.api_key_entry.get().strip()
         model = self.model_var.get()
         provider = self.provider_var.get()  # 獲取提供者選項
+        method = self.method_var.get()  # 獲取處理方式：markitdown 或 openai
+        output_format = self.format_var.get()  # 獲取輸出格式
         
         # 檢查輸入
         if not folder_path:
@@ -880,29 +887,152 @@ class EnhancedChromeCapture:
         if not os.path.exists(input_folder):
             self.show_message("錯誤", f"找不到資料夾: {input_folder}", "error")
             return
-            
-        # 執行分析處理
-        result = process_with_image_analyzer(
-            slides_folder=input_folder, 
-            api_key=api_key,
-            model=model,
-            provider=provider,  # 傳遞 provider 參數
-            output_file=None  # 使用預設輸出檔案
-        )
+
+        markdown_file_path = None
         
-        if result.get("success"):
-            self.show_message(
-                "成功", 
-                f"處理完成!\n\n已處理 {result.get('total_slides', 0)} 張投影片\n"
-                f"輸出檔案: {result.get('output_file', '無')}",
-                "info"
+        if method == "markitdown":
+            # 使用 MarkItDown 處理投影片
+            # 轉換 UI 選擇的格式為 process_captured_slides 函數所需格式
+            pct_format = "markdown"  # 預設生成 Markdown
+            if output_format == "pptx":
+                pct_format = "pptx"
+            elif output_format in ["both", "all"]:
+                pct_format = "both"
+                
+            # 執行 MarkItDown 處理
+            from markitdown_ppt import process_captured_slides
+            success = process_captured_slides(
+                slides_folder=input_folder,
+                output_format=pct_format,
+                api_key=api_key,
+                model=model
             )
+            
+            if success:
+                # 找出產生的 Markdown 文件
+                if output_format in ["markdown", "both", "all", "docx"]:
+                    expected_md = os.path.join(
+                        os.path.dirname(input_folder), 
+                        "slides_analysis.md"
+                    )
+                    if os.path.exists(expected_md):
+                        self.show_message(
+                            "成功", 
+                            f"已生成 Markdown 檔案: {expected_md}",
+                            "info"
+                        )
+                        markdown_file_path = expected_md
+                    else:
+                        self.show_message(
+                            "警告", 
+                            "處理成功但找不到 Markdown 檔案",
+                            "warning"
+                        )
+                
+                # 檢查 PPT 檔案是否生成
+                if output_format in ["pptx", "both", "all"]:
+                    expected_ppt = os.path.join(
+                        os.path.dirname(input_folder), 
+                        "slides.pptx"
+                    )
+                    if os.path.exists(expected_ppt):
+                        self.show_message(
+                            "成功", 
+                            f"已生成 PowerPoint 檔案: {expected_ppt}",
+                            "info"
+                        )
+                    else:
+                        self.show_message(
+                            "警告", 
+                            "處理成功但找不到 PowerPoint 檔案",
+                            "warning"
+                        )
+            else:
+                self.show_message(
+                    "錯誤", 
+                    "MarkItDown 處理失敗，請檢查日誌了解詳情",
+                    "error"
+                )
+                return
+        else:  # method == "openai"
+            # 使用視覺模型
+            result = process_with_image_analyzer(
+                slides_folder=input_folder, 
+                api_key=api_key,
+                model=model,
+                provider=provider,
+                output_file=None  # 使用預設輸出檔案
+            )
+            
+            if result.get("success"):
+                markdown_file_path = result.get("output_file")
+                
+                self.show_message(
+                    "成功", 
+                    f"處理完成!\n\n已處理 {result.get('total_slides', 0)} 張投影片\n"
+                    f"Markdown 檔案: {markdown_file_path}",
+                    "info"
+                )
+            else:
+                self.show_message(
+                    "錯誤", 
+                    f"處理失敗: {result.get('error', '未知錯誤')}", 
+                    "error"
+                )
+                return
+        
+        # 處理 Word (.docx) 轉換
+        if markdown_file_path and output_format in ["docx", "all"]:
+            try:
+                import shutil
+                pandoc_path = shutil.which("pandoc")
+                
+                if not pandoc_path:
+                    self.show_message(
+                        "錯誤",
+                        "未安裝 Pandoc，無法轉換為 Word 格式。\n"
+                        "請從 https://pandoc.org/installing.html 安裝 Pandoc。",
+                        "error"
+                    )
+                    return
+                    
+                try:
+                    from markdown_converter import convert_markdown_to_docx
+                    docx_path = os.path.splitext(markdown_file_path)[0] + ".docx"
+                    
+                    if convert_markdown_to_docx(markdown_file_path, docx_path):
+                        self.show_message(
+                            "成功",
+                            f"已將 Markdown 轉換為 Word 檔案: {docx_path}",
+                            "info"
+                        )
+                    else:
+                        self.show_message(
+                            "錯誤",
+                            "Word 轉換失敗，請檢查錯誤日誌",
+                            "error"
+                        )
+                except ImportError:
+                    self.show_message(
+                        "錯誤",
+                        "找不到 markdown_converter 模組，無法轉換為 Word",
+                        "error"
+                    )
+            except Exception as e:
+                self.show_message(
+                    "錯誤",
+                    f"Word 轉換時出錯: {str(e)}",
+                    "error"
+                )
+    
+    def show_message(self, title, message, type="info"):
+        """顯示消息框"""
+        if type == "error":
+            messagebox.showerror(title, message)
+        elif type == "warning":
+            messagebox.showwarning(title, message)
         else:
-            self.show_message(
-                "錯誤", 
-                f"處理失敗: {result.get('error', '未知錯誤')}", 
-                "error"
-            )
+            messagebox.showinfo(title, message)
     
     def run(self):
         """運行應用"""
