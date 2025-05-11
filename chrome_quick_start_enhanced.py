@@ -891,37 +891,46 @@ class EnhancedChromeCapture:
             messagebox.showwarning("警告", "無法獲取選擇投影片頁面資訊")
     
     def process_slides(self):
-        """處理選擇的投影片資料夾"""
-        folder = self.folder_entry.get()
-        api_key = self.api_key_entry.get() or None
+        """處理選擇的投影片"""
+        # 獲取選項
+        folder_path = self.folder_entry.get().strip()
+        api_key = self.api_key_entry.get().strip()
         model = self.model_var.get()
-        output_format = self.format_var.get()
-        method = self.method_var.get()
-        provider = self.provider_var.get()
+        provider = self.provider_var.get()  # 獲取提供者選項
         
-        # 保存 API Key 到實例變量中
-        if api_key:
-            self.saved_api_key = api_key
-        
-        if not os.path.exists(folder):
-            messagebox.showwarning("警告", f"資料夾不存在: {folder}")
+        # 檢查輸入
+        if not folder_path:
+            self.show_message("錯誤", "請輸入投影片資料夾路徑", "error")
             return
         
-        if method == "markitdown":
-            # 使用 MarkItDown 處理
-            if process_captured_slides(folder, output_format, api_key, model):
-                messagebox.showinfo("完成", "投影片處理已完成")
-        else:
-            # 使用視覺模型處理
-            success = process_with_image_analyzer(
-                folder, 
-                None,  # 輸出檔案路徑，將自動生成
-                api_key, 
-                model, 
-                provider
+        # 在當前目錄下建立資料夾
+        input_folder = os.path.join(os.getcwd(), folder_path)
+        if not os.path.exists(input_folder):
+            self.show_message("錯誤", f"找不到資料夾: {input_folder}", "error")
+            return
+            
+        # 執行分析處理
+        result = process_with_image_analyzer(
+            folder_path=input_folder, 
+            api_key=api_key,
+            model=model,
+            provider=provider,  # 傳遞 provider 參數
+            output_folder=None  # 使用預設輸出位置
+        )
+        
+        if result.get("success"):
+            self.show_message(
+                "成功", 
+                f"處理完成!\n\n已處理 {result.get('total_slides', 0)} 張投影片\n"
+                f"輸出檔案: {result.get('output_file', '無')}",
+                "info"
             )
-            if success:
-                messagebox.showinfo("完成", "投影片分析已完成")
+        else:
+            self.show_message(
+                "錯誤", 
+                f"處理失敗: {result.get('error', '未知錯誤')}", 
+                "error"
+            )
     
     def run(self):
         """運行應用"""

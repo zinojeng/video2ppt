@@ -31,7 +31,8 @@ def convert_images_to_markdown(
     title: str = "圖片集合",
     use_llm: bool = True,
     api_key: Optional[str] = None,
-    model: str = "gpt-4o-mini"
+    model: str = "gpt-4o-mini",
+    provider: str = "openai"
 ) -> Tuple[bool, str, Dict[str, Any]]:
     """
     將多個圖片檔案轉換為單一 Markdown 檔案
@@ -41,19 +42,34 @@ def convert_images_to_markdown(
         output_file (str): 輸出 Markdown 檔案路徑
         title (str): Markdown 文件標題
         use_llm (bool): 是否使用 LLM 處理圖片
-        api_key (Optional[str]): OpenAI API Key
-        model (str): 使用的 OpenAI 模型
+        api_key (Optional[str]): API Key (OpenAI 或 Google)
+        model (str): 使用的模型名稱
+        provider (str): API 提供者，可為 'openai' 或 'gemini'
         
     Returns:
         Tuple[bool, str, Dict]: (是否成功, 輸出檔案路徑, 處理資訊)
     """
     try:
-        # 嘗試導入 MarkItDown 和 OpenAI
+        # 嘗試導入必要模組
         try:
             from markitdown import MarkItDown
-            from openai import OpenAI, AuthenticationError
+            
+            # 根據提供者導入不同的 API 套件
+            if provider.lower() == "gemini":
+                try:
+                    import google.generativeai as genai
+                except ImportError:
+                    logger.error("找不到 google.generativeai 模組，請確保已安裝 google-genai 套件")
+                    return False, "", {"error": "缺少 Google Generative AI 模組"}
+            else:  # 默認為 OpenAI
+                try:
+                    from openai import OpenAI, AuthenticationError
+                except ImportError:
+                    logger.error("找不到 openai 模組，請確保已安裝相關套件")
+                    return False, "", {"error": "缺少 OpenAI 模組"}
+            
         except ImportError:
-            logger.error("找不到 markitdown 或 openai 模組，請確保已安裝相關套件")
+            logger.error("找不到 markitdown 模組，請確保已安裝相關套件")
             return False, "", {"error": "缺少必要模組"}
             
         logger.info(f"將 {len(image_paths)} 張圖片轉換為 Markdown")
@@ -85,27 +101,58 @@ def convert_images_to_markdown(
         
         if use_llm:
             logger.info(f"嘗試啟用 LLM ({model}) 進行處理...")
-            current_api_key = api_key or os.environ.get("OPENAI_API_KEY")
+            
+            # 根據提供者獲取適合的 API 金鑰
+            if provider.lower() == "gemini":
+                current_api_key = api_key or os.environ.get("GOOGLE_API_KEY")
+                env_var_name = "GOOGLE_API_KEY"
+            else:  # 默認為 OpenAI
+                current_api_key = api_key or os.environ.get("OPENAI_API_KEY")
+                env_var_name = "OPENAI_API_KEY"
+                
             if not current_api_key:
-                logger.warning("未提供 OpenAI API Key，無法使用 LLM 處理圖片。")
-                llm_info["status"] = "未提供 API Key"
+                logger.warning(f"未提供 {provider.upper()} API Key，無法使用 LLM 處理圖片。")
+                llm_info["status"] = f"未提供 {provider.upper()} API Key"
                 use_llm = False
             else:
                 try:
-                    llm_client = OpenAI(api_key=current_api_key)
-                    # 執行一個簡單的測試呼叫來驗證金鑰
-                    llm_client.models.list() 
-                    logger.info("OpenAI API Key 驗證成功。")
-                    md_kwargs["llm_client"] = llm_client
-                    md_kwargs["llm_model"] = model
-                    llm_info["status"] = "啟用成功"
-                    llm_info["model"] = model
-                except AuthenticationError:
-                    logger.error("OpenAI API Key 無效或錯誤，無法使用 LLM。")
-                    llm_info["status"] = "API Key 無效"
-                    use_llm = False
+                    # 根據提供者初始化適當的客戶端
+                    if provider.lower() == "gemini":
+                        # 初始化 Google Generative AI
+                        genai.configure(api_key=current_api_key)
+                        
+                        # 測試 API Key 是否有效
+                        try:
+                            # 簡單測試，列出可用模型
+                            models = genai.list_models()
+                            logger.info("Google API Key 驗證成功。")
+                            
+                            # 為 MarkItDown 準備參數
+                            # 注意：目前 MarkItDown 可能不直接支援 Gemini API，
+                            # 因此這裡我們只能設置基本參數，後續需要單獨處理圖片
+                            md_kwargs["llm_client"] = "gemini"  # 特殊標記
+                            md_kwargs["llm_model"] = model
+                            llm_info["status"] = "啟用成功"
+                            llm_info["model"] = model
+                            llm_info["provider"] = "gemini"
+                        except Exception as e:
+                            logger.error(f"Google API Key 驗證失敗: {e}")
+                            llm_info["status"] = "API Key 驗證失敗"
+                            use_llm = False
+                    else:  # 默認為 OpenAI
+                        # 初始化 OpenAI 客戶端
+                        llm_client = OpenAI(api_key=current_api_key)
+                        # 執行一個簡單的測試呼叫來驗證金鑰
+                        llm_client.models.list() 
+                        logger.info("OpenAI API Key 驗證成功。")
+                        md_kwargs["llm_client"] = llm_client
+                        md_kwargs["llm_model"] = model
+                        llm_info["status"] = "啟用成功"
+                        llm_info["model"] = model
+                        llm_info["provider"] = "openai"
+                        
                 except Exception as e:
-                    logger.error(f"初始化 OpenAI client 時發生錯誤: {e}")
+                    logger.error(f"初始化 {provider.upper()} client 時發生錯誤: {e}")
                     llm_info["status"] = f"初始化錯誤: {str(e)}"
                     use_llm = False
                     
@@ -158,7 +205,8 @@ def convert_images_to_markdown(
                             markdown_text=original_md,
                             base_dir=os.path.dirname(output_file),
                             api_key=current_api_key,
-                            model=model
+                            model=model,
+                            provider=provider
                         )
                         
                         # 寫入增強後的內容
@@ -350,6 +398,7 @@ def process_images_to_ppt(
     use_llm: bool = True,
     api_key: Optional[str] = None,
     model: str = "gpt-4o-mini",
+    provider: str = "openai",
     template_file: Optional[str] = None
 ) -> bool:
     """
@@ -361,8 +410,9 @@ def process_images_to_ppt(
         markdown_file (Optional[str]): 輸出 Markdown 檔案路徑，如果為 None 則自動生成
         title (str): 簡報標題
         use_llm (bool): 是否使用 LLM 處理圖片
-        api_key (Optional[str]): OpenAI API Key
-        model (str): 使用的 OpenAI 模型
+        api_key (Optional[str]): OpenAI 或 Google API Key
+        model (str): 使用的模型名稱
+        provider (str): API 提供者，可為 'openai' 或 'gemini'
         template_file (Optional[str]): PPT 模板檔案路徑
         
     Returns:
@@ -402,7 +452,8 @@ def process_images_to_ppt(
             title=title,
             use_llm=use_llm,
             api_key=api_key,
-            model=model
+            model=model,
+            provider=provider
         )
         
         if not success:
