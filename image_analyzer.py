@@ -87,25 +87,18 @@ def analyze_image(
     provider: str = "openai"
 ) -> Tuple[bool, str]:
     """
-    使用 OpenAI 或 DeepSeek API 分析圖片內容
+    使用 OpenAI、Gemini 或 DeepSeek API 分析圖片內容
     
     Args:
         image_path (str): 圖片檔案路徑
-        api_key (str): API Key (OpenAI 或 DeepSeek)
+        api_key (str): API Key (OpenAI、Google 或 DeepSeek)
         model (str): 使用的模型名稱
-        provider (str): API 提供者，可為 'openai' 或 'deepseek'
+        provider (str): API 提供者，可為 'openai'、'gemini' 或 'deepseek'
     
     Returns:
         Tuple[bool, str]: (是否成功, 分析結果)
     """
     try:
-        # 嘗試導入所需模組
-        try:
-            from openai import OpenAI
-        except ImportError:
-            logger.error("找不到 openai 模組，請確保已安裝")
-            return False, "缺少 OpenAI 模組"
-        
         # 檢查圖片是否存在
         if not os.path.exists(image_path):
             logger.error(f"圖片不存在: {image_path}")
@@ -120,41 +113,87 @@ def analyze_image(
         # 清理 API 金鑰（移除可能的換行符和空白）
         api_key = api_key.strip() if api_key else ""
         
-        # 轉換圖片為 Base64
-        base64_image = encode_image_to_base64(image_path)
-        if not base64_image:
-            return False, "無法轉換圖片為 Base64 格式"
-        
-        # 如果圖片大於 1MB，嘗試壓縮
-        if file_size > 1:
-            compressed = compress_image(image_path)
-            if compressed:
-                base64_image = compressed
-        
-        # 建立系統提示
-        system_prompt = (
-            "你是一個專業的圖片分析和描述專家。你的工作是詳細分析圖片內容，"
-            "提供準確且有深度的描述。請使用繁體中文回應。"
-            "\n\n描述應包含：\n"
-            "1. 總體概述：簡明扼要說明圖片主要內容\n"
-            "2. 詳細分析：包括主要元素、場景、人物、文字等\n"
-            "3. 圖片目的或用途（如果明顯）\n"
-            "4. 若圖片包含文字，請在描述中引用關鍵文字\n\n"
-            "請以流暢的段落形式提供分析，而非列表。分析需專業、客觀、準確。"
-        )
-        
         # 最多重試次數和延遲
         max_retries = 2
         retry_delay = 3  # 重試間隔秒數
         
-        for attempt in range(max_retries + 1):
+        # 判斷使用哪個提供者的 API
+        if provider.lower() == "gemini":
+            # 使用 Google Gemini API
             try:
-                if provider.lower() == "deepseek":
-                    # DeepSeek API 目前不支援圖片分析功能
-                    logger.info("DeepSeek 模型不支援圖片分析，使用預設模板")
-                    
-                    # 返回一個標準模板，而不嘗試發送圖片
-                    template = """
+                import google.generativeai as genai
+                
+                # 初始化 Gemini API
+                genai.configure(api_key=api_key)
+                
+                # 建立系統提示
+                gemini_prompt = (
+                    "請詳細分析並描述這張圖片中的內容。\n\n"
+                    "請使用繁體中文回應，並包含：\n"
+                    "1. 總體概述：簡明扼要說明圖片主要內容\n"
+                    "2. 詳細分析：包括主要元素、場景、人物、文字等\n"
+                    "3. 若圖片包含投影片，請特別描述投影片中的標題、結構和重點\n"
+                    "4. 若圖片包含圖表或數據，請具體說明其呈現的趨勢或資訊\n"
+                    "5. 若圖片包含文字，請在描述中引用關鍵文字\n\n"
+                    "請以流暢的段落形式提供分析，而非列表。分析需專業、客觀、準確。"
+                )
+                
+                # 選擇適合的模型
+                if "exp" in model:  # 實驗性模型
+                    model_name = model
+                elif model == "gemini-pro":
+                    model_name = "gemini-pro-vision"
+                elif "flash" in model.lower():
+                    model_name = "gemini-2.5-flash-vision"
+                else:  # 預設使用最新的 pro 模型
+                    model_name = "gemini-2.5-pro-vision"
+                
+                logger.info(f"使用 Gemini 模型: {model_name}")
+                
+                # 加載圖片
+                img = Image.open(image_path)
+                
+                # 設定 Gemini 模型
+                generation_config = {
+                    "temperature": 0.4,
+                    "top_p": 0.95,
+                    "top_k": 0,
+                    "max_output_tokens": 2048,
+                }
+                
+                # 初始化模型
+                gemini_model = genai.GenerativeModel(
+                    model_name=model_name,
+                    generation_config=generation_config
+                )
+                
+                # 發送請求
+                for attempt in range(max_retries + 1):
+                    try:
+                        response = gemini_model.generate_content([gemini_prompt, img])
+                        analysis = response.text
+                        return True, analysis
+                    except Exception as e:
+                        error_msg = str(e)
+                        logger.error(f"Gemini API 嘗試 {attempt+1}/{max_retries+1} 失敗: {error_msg}")
+                        
+                        if attempt < max_retries:
+                            wait_time = retry_delay * (attempt + 1)
+                            logger.warning(f"等待 {wait_time} 秒後重試...")
+                            time.sleep(wait_time)
+                        else:
+                            raise
+                
+            except ImportError:
+                logger.error("找不到 google.generativeai 模組，請確保已安裝")
+                return False, "缺少 Google Generative AI 模組，請執行 'pip install google-genai'"
+                
+        elif provider.lower() == "deepseek":
+            # DeepSeek API 目前不支援圖片分析功能
+            logger.info("DeepSeek 模型不支援圖片分析，使用預設模板")
+            
+            # 返回一個標準模板，而不嘗試發送圖片
+            template = """
 這是一個投影片內容分析模板。DeepSeek API 目前不支援視覺分析功能。
 
 標準投影片分析通常包含以下元素：
@@ -165,72 +204,102 @@ def analyze_image(
 5. 上下文相關的背景資訊
 
 若需進行實際的視覺內容分析，建議：
-- 切換至支援視覺分析的 OpenAI API
+- 切換至支援視覺分析的 OpenAI 或 Gemini API
 - 手動記錄投影片中的關鍵內容
 - 使用支援圖像識別的其他服務
 
 此回應為預設模板，因 DeepSeek API 目前僅支援純文本處理。
 """
-                    return True, template.strip()
-                else:
-                    # 使用 OpenAI API
-                    client = OpenAI(api_key=api_key)
-                    
-                    # 建立請求訊息列表
-                    messages = [
-                        {"role": "system", "content": system_prompt},
-                        {
-                            "role": "user",
-                            "content": [
-                                {"type": "text", "text": "請分析並描述這張圖片。"},
-                                {
-                                    "type": "image_url",
-                                    "image_url": {
-                                        "url": (
-                                            f"data:image/jpeg;base64,"
-                                            f"{base64_image}"
-                                        )
-                                    }
+            return True, template.strip()
+        else:
+            # 使用 OpenAI API
+            try:
+                from openai import OpenAI
+                
+                # 轉換圖片為 Base64
+                base64_image = encode_image_to_base64(image_path)
+                if not base64_image:
+                    return False, "無法轉換圖片為 Base64 格式"
+                
+                # 如果圖片大於 1MB，嘗試壓縮
+                if file_size > 1:
+                    compressed = compress_image(image_path)
+                    if compressed:
+                        base64_image = compressed
+                
+                # 建立系統提示
+                system_prompt = (
+                    "你是一個專業的圖片分析和描述專家。你的工作是詳細分析圖片內容，"
+                    "提供準確且有深度的描述。請使用繁體中文回應。"
+                    "\n\n描述應包含：\n"
+                    "1. 總體概述：簡明扼要說明圖片主要內容\n"
+                    "2. 詳細分析：包括主要元素、場景、人物、文字等\n"
+                    "3. 圖片目的或用途（如果明顯）\n"
+                    "4. 若圖片包含文字，請在描述中引用關鍵文字\n\n"
+                    "請以流暢的段落形式提供分析，而非列表。分析需專業、客觀、準確。"
+                )
+                
+                client = OpenAI(api_key=api_key)
+                
+                # 建立請求訊息列表
+                messages = [
+                    {"role": "system", "content": system_prompt},
+                    {
+                        "role": "user",
+                        "content": [
+                            {"type": "text", "text": "請分析並描述這張圖片。"},
+                            {
+                                "type": "image_url",
+                                "image_url": {
+                                    "url": (
+                                        f"data:image/jpeg;base64,"
+                                        f"{base64_image}"
+                                    )
                                 }
-                            ]
-                        }
-                    ]
-                    
-                    # 動態構建請求參數
-                    request_kwargs = {
-                        "model": model,
-                        "messages": messages,
+                            }
+                        ]
                     }
-                    
-                    # 根據模型類型添加可選參數
-                    if model.startswith("gpt-4o"):
-                        request_kwargs["temperature"] = 0.5
-                        request_kwargs["max_tokens"] = 1000
-                    
-                    # 發送請求
-                    logger.info(f"使用 OpenAI 模型: {model}")
-                    response = client.chat.completions.create(**request_kwargs)
+                ]
                 
-                # 成功獲取響應
-                analysis = response.choices[0].message.content
-                return True, analysis
+                # 動態構建請求參數
+                request_kwargs = {
+                    "model": model,
+                    "messages": messages,
+                }
                 
-            except Exception as e:
-                error_msg = str(e)
-                logger.error(f"嘗試 {attempt+1}/{max_retries+1} 失敗: {error_msg}")
+                # 根據模型類型添加可選參數
+                if model.startswith("gpt-4o"):
+                    request_kwargs["temperature"] = 0.5
+                    request_kwargs["max_tokens"] = 1000
                 
-                if "429" in error_msg and attempt < max_retries:
-                    # 速率限制錯誤，等待後重試
-                    wait_time = retry_delay * (attempt + 1)
-                    logger.warning(f"API 速率限制，等待 {wait_time} 秒後重試...")
-                    time.sleep(wait_time)
-                elif attempt < max_retries:
-                    # 其他錯誤，也嘗試重試
-                    logger.warning(f"請求失敗，等待 {retry_delay} 秒後重試...")
-                    time.sleep(retry_delay)
-                else:
-                    # 已達最大重試次數，拋出異常
-                    raise
+                # 發送請求
+                logger.info(f"使用 OpenAI 模型: {model}")
+                
+                for attempt in range(max_retries + 1):
+                    try:
+                        response = client.chat.completions.create(**request_kwargs)
+                        analysis = response.choices[0].message.content
+                        return True, analysis
+                    except Exception as e:
+                        error_msg = str(e)
+                        logger.error(f"OpenAI API 嘗試 {attempt+1}/{max_retries+1} 失敗: {error_msg}")
+                        
+                        if "429" in error_msg and attempt < max_retries:
+                            # 速率限制錯誤，等待後重試
+                            wait_time = retry_delay * (attempt + 1)
+                            logger.warning(f"API 速率限制，等待 {wait_time} 秒後重試...")
+                            time.sleep(wait_time)
+                        elif attempt < max_retries:
+                            # 其他錯誤，也嘗試重試
+                            logger.warning(f"請求失敗，等待 {retry_delay} 秒後重試...")
+                            time.sleep(retry_delay)
+                        else:
+                            # 已達最大重試次數，拋出異常
+                            raise
+                
+            except ImportError:
+                logger.error("找不到 openai 模組，請確保已安裝")
+                return False, "缺少 OpenAI 模組"
         
         # 不應該到達這裡，但為了安全添加
         return False, "分析失敗，請稍後再試"
