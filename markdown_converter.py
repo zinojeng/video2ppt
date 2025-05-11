@@ -12,7 +12,7 @@ import subprocess
 import os
 import logging
 import sys
-from typing import Dict, Optional
+from typing import Dict
 
 try:
     import win32com.client
@@ -47,9 +47,7 @@ def check_pandoc_installed():
 
 def convert_markdown_to_docx(
     markdown_file_path: str, 
-    output_docx_path: str,
-    reference_docx: Optional[str] = None,
-    apply_styles: bool = False
+    output_docx_path: str
 ) -> bool:
     """
     將 Markdown 檔案轉換為 Word (.docx) 檔案。
@@ -57,8 +55,6 @@ def convert_markdown_to_docx(
     Args:
         markdown_file_path (str): 輸入的 Markdown 檔案路徑。
         output_docx_path (str): 輸出的 .docx 檔案路徑。
-        reference_docx (Optional[str]): 參考 docx 檔案路徑，用於指定樣式。
-        apply_styles (bool): 是否應用自定義樣式和格式化。
 
     Returns:
         bool: 如果轉換成功則返回 True，否則返回 False。
@@ -81,10 +77,6 @@ def convert_markdown_to_docx(
             output_docx_path
         ]
         
-        # 如果有參考文檔，添加參考選項
-        if reference_docx and os.path.exists(reference_docx):
-            command.extend(["--reference-doc", reference_docx])
-        
         # 執行 pandoc 命令
         process = subprocess.run(
             command, check=True, capture_output=True, text=True
@@ -92,10 +84,6 @@ def convert_markdown_to_docx(
         
         if process.stderr:
             logger.warning(f"Pandoc 轉換過程中有警告或訊息: {process.stderr}")
-        
-        # 如果需要，並且支持 win32com，則應用額外的樣式
-        if apply_styles and HAS_WIN32COM and os.name == 'nt':
-            apply_word_styles(output_docx_path)
         
         logger.info(f"成功轉換 Markdown 至 DOCX: {output_docx_path}")
         return True
@@ -210,7 +198,9 @@ def process_table_captions(doc):
                 
                 # 解析標題
                 caption_parts = original_caption.split(":", 1)
-                title = caption_parts[1].strip() if len(caption_parts) > 1 else ""
+                title = ""
+                if len(caption_parts) > 1:
+                    title = caption_parts[1].strip()
                 
                 # 插入表格標題欄位
                 original_range.InsertCaption(
@@ -244,7 +234,9 @@ def process_figure_captions(doc):
                 
                 # 解析標題
                 caption_parts = original_caption.split(":", 1)
-                title = caption_parts[1].strip() if len(caption_parts) > 1 else ""
+                title = ""
+                if len(caption_parts) > 1:
+                    title = caption_parts[1].strip()
                 
                 # 插入圖片標題欄位
                 original_range.InsertCaption(
@@ -257,8 +249,7 @@ def process_figure_captions(doc):
 
 def batch_convert_markdown_files(
     markdown_folder: str, 
-    output_folder: str = None,
-    template_docx: str = None
+    output_folder: str = None
 ) -> Dict[str, bool]:
     """
     批量將資料夾中的 Markdown 檔案轉換為 Word 檔案
@@ -266,7 +257,6 @@ def batch_convert_markdown_files(
     Args:
         markdown_folder (str): 包含 Markdown 檔案的資料夾
         output_folder (str, optional): 輸出 Word 檔案的資料夾，預設為與輸入相同
-        template_docx (str, optional): Word 模板檔案路徑
 
     Returns:
         Dict[str, bool]: 檔案名稱和成功狀態的字典
@@ -287,12 +277,9 @@ def batch_convert_markdown_files(
             docx_name = os.path.splitext(filename)[0] + '.docx'
             docx_path = os.path.join(output_folder, docx_name)
             
-            apply_styles = True if HAS_WIN32COM and os.name == 'nt' else False
             success = convert_markdown_to_docx(
                 md_path, 
-                docx_path, 
-                reference_docx=template_docx,
-                apply_styles=apply_styles
+                docx_path
             )
             results[filename] = success
     
@@ -304,19 +291,16 @@ if __name__ == '__main__':
     if len(sys.argv) < 3:
         print(
             "使用方法: python markdown_converter.py "
-            "<輸入Markdown檔案> <輸出Word檔案.docx> [Word模板檔案.docx]"
+            "<輸入Markdown檔案> <輸出Word檔案.docx>"
         )
         sys.exit(1)
     
     input_md = sys.argv[1]
     output_docx = sys.argv[2]
-    template_docx = sys.argv[3] if len(sys.argv) > 3 else None
     
     if convert_markdown_to_docx(
         input_md, 
-        output_docx, 
-        reference_docx=template_docx,
-        apply_styles=True if HAS_WIN32COM and os.name == 'nt' else False
+        output_docx
     ):
         print(f"檔案已成功轉換並保存至: {output_docx}")
     else:

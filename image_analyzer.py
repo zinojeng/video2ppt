@@ -342,7 +342,8 @@ def enhance_markdown_with_image_analysis(
     markdown_text: str,
     base_dir: str = ".",
     api_key: Optional[str] = None,
-    model: str = "o4-mini"
+    model: str = "o4-mini",
+    provider: str = "openai"
 ) -> Tuple[str, Dict[str, int]]:
     """
     增強 Markdown 文件中的圖片描述
@@ -350,22 +351,33 @@ def enhance_markdown_with_image_analysis(
     Args:
         markdown_text (str): Markdown 文字內容
         base_dir (str): 圖片基礎目錄，用於解析相對路徑
-        api_key (Optional[str]): OpenAI API Key
-        model (str): 使用的 OpenAI 模型
+        api_key (Optional[str]): API Key (OpenAI 或 Google)
+        model (str): 使用的模型
+        provider (str): API 提供者，可為 'openai' 或 'gemini'
     
     Returns:
         Tuple[str, Dict[str, int]]: (增強後的 Markdown 文字, 處理統計)
     """
     # 獲取 API 金鑰
     if not api_key:
-        api_key = os.environ.get("OPENAI_API_KEY")
-        if not api_key:
-            logger.error("找不到 OpenAI API 金鑰")
-            return markdown_text, {
-                "images_processed": 0,
-                "images_analyzed": 0,
-                "images_failed": 0
-            }
+        if provider.lower() == "gemini":
+            api_key = os.environ.get("GOOGLE_API_KEY")
+            if not api_key:
+                logger.error("找不到 Google API 金鑰")
+                return markdown_text, {
+                    "images_processed": 0,
+                    "images_analyzed": 0,
+                    "images_failed": 0
+                }
+        else:  # OpenAI
+            api_key = os.environ.get("OPENAI_API_KEY")
+            if not api_key:
+                logger.error("找不到 OpenAI API 金鑰")
+                return markdown_text, {
+                    "images_processed": 0,
+                    "images_analyzed": 0,
+                    "images_failed": 0
+                }
     
     # 找出所有圖片標記
     images = find_markdown_images(markdown_text)
@@ -403,7 +415,8 @@ def enhance_markdown_with_image_analysis(
             success, analysis = analyze_image(
                 image_path=img_path,
                 api_key=api_key,
-                model=model
+                model=model,
+                provider=provider
             )
             
             if success:
@@ -457,6 +470,11 @@ if __name__ == "__main__":
         help="使用的 OpenAI 模型，預設為 o4-mini"
     )
     parser.add_argument(
+        "--provider", "-p",
+        default="openai",
+        help="API 提供者，可為 'openai' 或 'gemini'"
+    )
+    parser.add_argument(
         "--verbose", "-v",
         action="store_true",
         help="顯示詳細資訊"
@@ -485,7 +503,8 @@ if __name__ == "__main__":
         markdown_text=markdown_text,
         base_dir=os.path.dirname(os.path.abspath(args.input_file)),
         api_key=args.api_key,
-        model=args.model
+        model=args.model,
+        provider=args.provider
     )
     
     # 寫入輸出檔案

@@ -9,3 +9,4 @@ scikit-image>=0.19.0
 markitdown>=0.1.1  # 增強型Markdown生成功能
 openai>=1.0.0      # AI輔助功能 
 google-genai>=0.4.0 # Google Gemini API 功能 
+pywin32>=306       # Windows 系統使用 Word 風格增強功能 

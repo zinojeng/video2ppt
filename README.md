@@ -78,15 +78,39 @@ python video_audio_processor.py
 - scikit-image：計算圖像相似度
 - markitdown (可選)：增強型Markdown生成
 - openai (可選)：AI輔助圖像分析和內容提取
+- pandoc (可選，用於 Markdown 轉 Word)：需要單獨安裝，見下方說明
+
+### Pandoc 安裝說明（用於 Markdown 轉 Word 功能）
+
+若要使用 Markdown 轉 Word 功能，需要安裝 Pandoc：
+
+1. 訪問 [Pandoc 官方網站](https://pandoc.org/installing.html) 下載適合您作業系統的安裝包。
+2. 按照安裝嚮導完成安裝。
+3. 安裝後，重啟程式或系統以確保環境變數設定生效。
+
+**Linux 安裝示例：**
+```bash
+sudo apt-get install pandoc
+```
+
+**macOS 安裝示例：**
+```bash
+brew install pandoc
+```
+
+**Windows：**
+從官網下載安裝程式並執行。
 
 ## 開發說明
 
 - `video_audio_processor.py`：主程式，提供GUI界面和主要功能
 - `markitdown_helper.py`：輔助模組，處理圖像到Markdown和PowerPoint的轉換
 - `test_slides.py`：測試腳本，用於測試幻燈片處理功能
+- `markdown_converter.py`：處理 Markdown 轉 Word 功能的模組
 
 ## 常見問題
 
 1. **幻燈片捕獲不完整**：調整相似度閾值，較低的值會捕獲更多的變化
 2. **音頻提取失敗**：確保安裝了moviepy和其依賴項
 3. **MarkItDown功能不可用**：確保安裝了markitdown模組（`pip install markitdown>=0.1.1`）
+4. **Markdown 轉 Word 失敗**：確保已安裝 Pandoc，詳見上方「Pandoc 安裝說明」

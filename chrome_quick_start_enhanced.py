@@ -63,6 +63,13 @@ def check_dependencies():
         except ImportError:
             missing_optional.append(package)
     
+    # 檢查 Pandoc 是否已安裝（用於 Markdown 轉 Word）
+    import shutil
+    pandoc_path = shutil.which("pandoc")
+    if not pandoc_path:
+        print("警告: 未安裝 Pandoc，無法將 Markdown 轉換為 Word 格式。")
+        print("請從 https://pandoc.org/installing.html 安裝 Pandoc。")
+    
     if missing_optional:
         print(f"注意: 未安裝可選套件: {', '.join(missing_optional)}")
         print("如果您想使用 MarkItDown 處理功能，請安裝:")
@@ -91,7 +98,8 @@ def process_captured_slides(
     slides_folder, 
     output_format="markdown", 
     api_key=None, 
-    model="gpt-4o-mini"
+    model="gpt-4o-mini",
+    provider="openai"
 ):
     """處理已捕獲的投影片，生成 Markdown 或增強的文字分析"""
     try:
@@ -545,20 +553,6 @@ class EnhancedChromeCapture:
             variable=self.method_var, value="openai"
         ).pack(side=tk.LEFT, padx=5)
         
-        # Word 模板選擇
-        template_frame = tk.Frame(frame)
-        template_frame.pack(fill=tk.X, pady=10)
-        
-        tk.Label(template_frame, text="Word 模板:").pack(side=tk.LEFT, padx=10)
-        self.template_entry = tk.Entry(template_frame, width=40)
-        self.template_entry.pack(side=tk.LEFT, padx=5, fill=tk.X, expand=True)
-        
-        self.template_browse_btn = tk.Button(
-            template_frame, text="瀏覽...", 
-            command=lambda: self.browse_docx_template(self.template_entry)
-        )
-        self.template_browse_btn.pack(side=tk.LEFT, padx=5)
-        
         # 按鈕區域
         btn_frame = tk.Frame(frame)
         btn_frame.pack(fill=tk.X, pady=20)
@@ -881,18 +875,6 @@ class EnhancedChromeCapture:
         else:
             messagebox.showwarning("警告", "無法獲取選擇投影片頁面資訊")
     
-    def browse_docx_template(self, entry_widget):
-        """瀏覽並選擇 Word 模板檔案"""
-        file_path = filedialog.askopenfilename(
-            initialdir=(os.path.dirname(entry_widget.get()) 
-                      if entry_widget.get() else os.getcwd()),
-            title="選擇 Word 模板檔案",
-            filetypes=(("Word 檔案", "*.docx"), ("所有檔案", "*.*"))
-        )
-        if file_path:
-            entry_widget.delete(0, tk.END)
-            entry_widget.insert(0, file_path)
-    
     def process_slides(self):
         """處理選擇的投影片"""
         # 獲取選項
@@ -902,7 +884,6 @@ class EnhancedChromeCapture:
         provider = self.provider_var.get()  # 獲取提供者選項
         method = self.method_var.get()  # 獲取處理方式：markitdown 或 openai
         output_format = self.format_var.get()  # 獲取輸出格式
-        template_path = self.template_entry.get().strip()  # 獲取 Word 模板路徑
         
         # 檢查輸入
         if not folder_path:
@@ -932,7 +913,8 @@ class EnhancedChromeCapture:
                 slides_folder=input_folder,
                 output_format=pct_format,
                 api_key=api_key,
-                model=model
+                model=model,
+                provider=provider
             )
             
             if success:
@@ -1028,16 +1010,9 @@ class EnhancedChromeCapture:
                     docx_path = os.path.splitext(markdown_file_path)[0] + \
                         ".docx"
                     
-                    # 檢查是否指定了模板
-                    reference_docx = None
-                    if template_path and os.path.exists(template_path):
-                        reference_docx = template_path
-                    
                     if convert_markdown_to_docx(
                         markdown_file_path, 
-                        docx_path,
-                        reference_docx=reference_docx,
-                        apply_styles=True
+                        docx_path
                     ):
                         self.show_message(
                             "成功",

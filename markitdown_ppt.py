@@ -100,24 +100,16 @@ def convert_images_to_markdown(
         llm_info = {}
         
         if use_llm:
-            logger.info(f"嘗試啟用 LLM ({model}) 進行處理...")
+            logger.info(f"嘗試啟用 LLM ({model}) 進行處理，提供者: {provider}...")
             
             # 根據提供者獲取適合的 API 金鑰
             if provider.lower() == "gemini":
                 current_api_key = api_key or os.environ.get("GOOGLE_API_KEY")
                 env_var_name = "GOOGLE_API_KEY"
-            else:  # 默認為 OpenAI
-                current_api_key = api_key or os.environ.get("OPENAI_API_KEY")
-                env_var_name = "OPENAI_API_KEY"
                 
-            if not current_api_key:
-                logger.warning(f"未提供 {provider.upper()} API Key，無法使用 LLM 處理圖片。")
-                llm_info["status"] = f"未提供 {provider.upper()} API Key"
-                use_llm = False
-            else:
-                try:
-                    # 根據提供者初始化適當的客戶端
-                    if provider.lower() == "gemini":
+                # 特別處理 Gemini API
+                if current_api_key:
+                    try:
                         # 初始化 Google Generative AI
                         genai.configure(api_key=current_api_key)
                         
@@ -128,9 +120,7 @@ def convert_images_to_markdown(
                             logger.info("Google API Key 驗證成功。")
                             
                             # 為 MarkItDown 準備參數
-                            # 注意：目前 MarkItDown 可能不直接支援 Gemini API，
-                            # 因此這裡我們只能設置基本參數，後續需要單獨處理圖片
-                            md_kwargs["llm_client"] = "gemini"  # 特殊標記
+                            md_kwargs["llm_client"] = genai  # 傳遞實際的 genai 模組，而不是字符串
                             md_kwargs["llm_model"] = model
                             llm_info["status"] = "啟用成功"
                             llm_info["model"] = model
@@ -139,7 +129,24 @@ def convert_images_to_markdown(
                             logger.error(f"Google API Key 驗證失敗: {e}")
                             llm_info["status"] = "API Key 驗證失敗"
                             use_llm = False
-                    else:  # 默認為 OpenAI
+                    except Exception as e:
+                        logger.error(f"初始化 Gemini client 時發生錯誤: {e}")
+                        llm_info["status"] = f"初始化錯誤: {str(e)}"
+                        use_llm = False
+                else:
+                    logger.warning("未提供 Gemini API Key，無法使用 LLM 處理圖片。")
+                    llm_info["status"] = "未提供 Gemini API Key"
+                    use_llm = False
+            else:  # 默認為 OpenAI
+                current_api_key = api_key or os.environ.get("OPENAI_API_KEY")
+                env_var_name = "OPENAI_API_KEY"
+                
+                if not current_api_key:
+                    logger.warning("未提供 OpenAI API Key，無法使用 LLM 處理圖片。")
+                    llm_info["status"] = "未提供 OpenAI API Key"
+                    use_llm = False
+                else:
+                    try:
                         # 初始化 OpenAI 客戶端
                         llm_client = OpenAI(api_key=current_api_key)
                         # 執行一個簡單的測試呼叫來驗證金鑰
@@ -150,11 +157,10 @@ def convert_images_to_markdown(
                         llm_info["status"] = "啟用成功"
                         llm_info["model"] = model
                         llm_info["provider"] = "openai"
-                        
-                except Exception as e:
-                    logger.error(f"初始化 {provider.upper()} client 時發生錯誤: {e}")
-                    llm_info["status"] = f"初始化錯誤: {str(e)}"
-                    use_llm = False
+                    except Exception as e:
+                        logger.error(f"初始化 OpenAI client 時發生錯誤: {e}")
+                        llm_info["status"] = f"初始化錯誤: {str(e)}"
+                        use_llm = False
                     
         md = MarkItDown(**md_kwargs)
         
@@ -481,6 +487,91 @@ def process_images_to_ppt(
         error_details = traceback.format_exc()
         logger.error(error_details)
         return False
+
+
+def process_captured_slides(
+    slides_folder: str, 
+    output_format: str = "markdown", 
+    api_key: Optional[str] = None, 
+    model: str = "gpt-4o-mini",
+    provider: str = "openai"
+) -> bool:
+    """
+    處理已捕獲的投影片，生成 Markdown 或 PowerPoint 或兩者都生成
+    
+    Args:
+        slides_folder (str): 包含投影片圖片的資料夾路徑
+        output_format (str): 輸出格式 ("markdown", "pptx", "both")
+        api_key (Optional[str]): API Key (OpenAI 或 Google)
+        model (str): 使用的模型名稱
+        provider (str): API 提供者，可為 'openai' 或 'gemini'
+        
+    Returns:
+        bool: 處理是否成功
+    """
+    logger.info(f"開始處理投影片: {slides_folder}, 格式: {output_format}")
+    logger.info(f"使用 API 提供者: {provider}, 模型: {model}")
+    
+    # 檢查資料夾是否存在
+    if not os.path.exists(slides_folder):
+        logger.error(f"資料夾不存在: {slides_folder}")
+        return False
+    
+    # 獲取所有圖片檔案
+    image_files = []
+    for filename in sorted(os.listdir(slides_folder)):
+        if filename.lower().endswith(('.png', '.jpg', '.jpeg')):
+            image_files.append(os.path.join(slides_folder, filename))
+    
+    if not image_files:
+        logger.error(f"資料夾中沒有圖片檔案: {slides_folder}")
+        return False
+    
+    success = True
+    
+    # 處理 Markdown
+    if output_format in ["markdown", "both"]:
+        output_md = os.path.join(
+            os.path.dirname(slides_folder), 
+            "slides_analysis.md"
+        )
+        
+        md_success, _, _ = convert_images_to_markdown(
+            image_paths=image_files,
+            output_file=output_md,
+            title="投影片內容分析",
+            use_llm=(api_key is not None),
+            api_key=api_key,
+            model=model,
+            provider=provider
+        )
+        
+        if not md_success:
+            logger.error("Markdown 轉換失敗")
+            success = False
+    
+    # 處理 PPT
+    if output_format in ["pptx", "both"]:
+        output_ppt = os.path.join(
+            os.path.dirname(slides_folder), 
+            "slides.pptx"
+        )
+        
+        ppt_success = process_images_to_ppt(
+            image_dir=slides_folder,
+            output_ppt=output_ppt,
+            title="投影片簡報",
+            use_llm=(api_key is not None),
+            api_key=api_key,
+            model=model,
+            provider=provider
+        )
+        
+        if not ppt_success:
+            logger.error("PowerPoint 轉換失敗")
+            success = False
+    
+    return success
 
 
 def main():
