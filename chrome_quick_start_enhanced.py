@@ -911,11 +911,11 @@ class EnhancedChromeCapture:
             
         # 執行分析處理
         result = process_with_image_analyzer(
-            folder_path=input_folder, 
+            slides_folder=input_folder, 
             api_key=api_key,
             model=model,
             provider=provider,  # 傳遞 provider 參數
-            output_folder=None  # 使用預設輸出位置
+            output_file=None  # 使用預設輸出檔案
         )
         
         if result.get("success"):
