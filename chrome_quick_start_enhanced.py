@@ -471,7 +471,7 @@ class EnhancedChromeCapture:
         
         tk.Label(provider_frame, text="API 提供者:").pack(side=tk.LEFT, padx=10)
         
-        self.provider_var = tk.StringVar(value="openai")
+        self.provider_var = tk.StringVar(value="gemini")
         
         tk.Radiobutton(
             provider_frame, text="OpenAI", 
