@@ -139,14 +139,8 @@ def analyze_image(
                 )
                 
                 # 選擇適合的模型
-                if "exp" in model:  # 實驗性模型
-                    model_name = model
-                elif model == "gemini-pro":
-                    model_name = "gemini-pro-vision"
-                elif "flash" in model.lower():
-                    model_name = "gemini-2.5-flash-vision"
-                else:  # 預設使用最新的 pro 模型
-                    model_name = "gemini-2.5-pro-vision"
+                # 直接使用傳入的模型名稱，因為 Gemini 的多模態模型名稱本身已包含視覺能力
+                model_name = model
                 
                 logger.info(f"使用 Gemini 模型: {model_name}")
                 

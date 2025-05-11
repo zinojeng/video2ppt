@@ -178,7 +178,7 @@ def process_with_image_analyzer(
         
         if not os.path.exists(slides_folder) or not os.listdir(slides_folder):
             messagebox.showinfo("提示", "找不到投影片或資料夾為空")
-            return False
+            return {"success": False, "error": "找不到投影片或資料夾為空"}
             
         # 獲取所有圖片檔案路徑
         image_files = []
@@ -188,7 +188,7 @@ def process_with_image_analyzer(
                 
         if not image_files:
             messagebox.showinfo("提示", "未找到圖片檔案")
-            return False
+            return {"success": False, "error": "未找到圖片檔案"}
         
         # 如果沒有指定輸出檔案，創建預設檔案名稱
         if not output_file:
@@ -201,8 +201,7 @@ def process_with_image_analyzer(
         # 確保 API Key 存在
         api_key_env_vars = {
             "openai": "OPENAI_API_KEY",
-            "gemini": "GOOGLE_API_KEY",
-            "deepseek": "DEEPSEEK_API_KEY"
+            "gemini": "GOOGLE_API_KEY"
         }
         env_var = api_key_env_vars.get(provider.lower(), "OPENAI_API_KEY")
         current_api_key = api_key or os.environ.get(env_var)
@@ -212,24 +211,26 @@ def process_with_image_analyzer(
                 "警告", 
                 f"未提供 {provider.upper()} API Key，無法進行圖片分析"
             )
-            return False
+            return {
+                "success": False, 
+                "error": f"未提供 {provider.upper()} API Key"
+            }
             
         # 創建 Markdown 檔案
         with open(output_file, 'w', encoding='utf-8') as f:
             provider_display = {
                 "openai": "OpenAI",
-                "gemini": "Google Gemini",
-                "deepseek": "DeepSeek"
+                "gemini": "Google Gemini"
             }.get(provider.lower(), provider.upper())
             
-            f.write(f"# 投影片內容 {provider_display} 視覺分析\n\n")
+            f.write(f"# 投影片內容 {provider_display} 視覺分析\\n\\n")
             
             # 處理每張圖片
             success_count = 0
             for img_path in image_files:
                 img_name = os.path.basename(img_path)
-                f.write(f"## 投影片：{img_name}\n\n")
-                f.write(f"![{img_name}]({img_path})\n\n")
+                f.write(f"## 投影片：{img_name}\\n\\n")
+                f.write(f"![{img_name}]({img_path})\\n\\n")
                 
                 # 分析圖片
                 success, analysis = analyze_image(
@@ -240,10 +241,10 @@ def process_with_image_analyzer(
                 )
                 
                 if success:
-                    f.write(f"{analysis}\n\n")
+                    f.write(f"{analysis}\\n\\n")
                     success_count += 1
                 else:
-                    f.write(f"*分析失敗: {analysis}*\n\n")
+                    f.write(f"*分析失敗: {analysis}*\\n\\n")
         
         if success_count > 0:
             msg = (
@@ -251,16 +252,21 @@ def process_with_image_analyzer(
                 f"並生成 Markdown 檔案: {output_file}"
             )
             messagebox.showinfo("成功", msg)
-            return True
+            return {
+                "success": True, 
+                "total_slides": len(image_files), 
+                "analyzed_slides": success_count,
+                "output_file": output_file
+            }
         else:
             messagebox.showwarning("警告", "所有圖片分析均失敗")
-            return False
+            return {"success": False, "error": "所有圖片分析均失敗"}
             
     except Exception as e:
         error_msg = traceback.format_exc()
-        print(f"分析圖片時出錯: {str(e)}\n{error_msg}")
-        messagebox.showerror("錯誤", f"分析圖片時出錯:\n{str(e)}")
-        return False
+        print(f"分析圖片時出錯: {str(e)}\\n{error_msg}")
+        messagebox.showerror("錯誤", f"分析圖片時出錯:\\n{str(e)}")
+        return {"success": False, "error": str(e), "details": error_msg}
 
 
 class EnhancedChromeCapture:
@@ -278,9 +284,6 @@ class EnhancedChromeCapture:
         self.image_label = None
         self.image_preview = None
         self.image_cache = []  # 添加圖片緩存列表，防止圖片被垃圾回收
-        
-        # 保存使用者的 API Key
-        self.saved_api_key = os.environ.get("OPENAI_API_KEY", "")
         
         # 創建頁面框架
         self.setup_ui()
@@ -317,15 +320,8 @@ class EnhancedChromeCapture:
     
     def on_tab_changed(self, event):
         """處理標籤頁切換事件"""
-        # 獲取當前選中的標籤頁索引
-        current_tab = self.notebook.index('current')
-        
-        # 如果切換到分析已選擇投影片標籤頁，將保存的 API Key 填入
-        if current_tab == 2:  # 分析已選擇投影片頁面
-            # 如果 API Key 欄位為空但有保存的值，則填入
-            if not self.api_key_entry.get() and self.saved_api_key:
-                self.api_key_entry.delete(0, tk.END)
-                self.api_key_entry.insert(0, self.saved_api_key)
+        # 不再需要自動填入 API Key，此方法保留但不執行任何操作
+        pass
     
     def setup_capture_ui(self):
         """設置捕獲模式 UI"""
@@ -459,12 +455,6 @@ class EnhancedChromeCapture:
         self.api_key_entry = tk.Entry(api_frame, width=40)
         self.api_key_entry.pack(side=tk.LEFT, padx=5, fill=tk.X, expand=True)
         
-        # 從環境變數獲取 API Key
-        api_key_env = os.environ.get("OPENAI_API_KEY", "")
-        if api_key_env:
-            self.api_key_entry.insert(0, api_key_env)
-            self.saved_api_key = api_key_env
-        
         # API 提供者選擇
         provider_frame = tk.Frame(frame)
         provider_frame.pack(fill=tk.X, pady=10)
@@ -485,12 +475,6 @@ class EnhancedChromeCapture:
             command=self.update_model_options
         ).pack(side=tk.LEFT, padx=5)
         
-        tk.Radiobutton(
-            provider_frame, text="DeepSeek", 
-            variable=self.provider_var, value="deepseek",
-            command=self.update_model_options
-        ).pack(side=tk.LEFT, padx=5)
-        
         # 模型選擇
         model_frame = tk.Frame(frame)
         model_frame.pack(fill=tk.X, pady=10)
@@ -501,15 +485,7 @@ class EnhancedChromeCapture:
         self.openai_models = ["gpt-4o-mini", "gpt-4o", "o4-mini", "o4"]
         self.gemini_models = [
             "gemini-2.5-pro-exp-03-25",
-            "gemini-2.5-pro", 
-            "gemini-2.5-flash", 
-            "gemini-pro", 
-            "gemini-flash"
-        ]
-        self.deepseek_models = [
-            "deepseek-chat", 
-            "deepseek-reasoner", 
-            "DeepSeek-V3-0324"
+            "gemini-2.5-flash-preview-04-17"
         ]
         
         # 定義 Gemini 模型列表，並輸出以供調試
@@ -584,11 +560,7 @@ class EnhancedChromeCapture:
         
         print(f"更新模型選項，選擇的提供者: {provider}")
         
-        if provider == "deepseek":
-            print("DeepSeek 模型列表:", self.deepseek_models)
-            self.model_menu.config(values=self.deepseek_models)
-            self.model_var.set(self.deepseek_models[0])
-        elif provider == "gemini":
+        if provider == "gemini":
             print("Gemini 模型列表:", self.gemini_models)
             self.model_menu.config(values=self.gemini_models)
             self.model_var.set(self.gemini_models[0])
