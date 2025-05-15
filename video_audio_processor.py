@@ -18,6 +18,7 @@ import traceback
 import threading
 from PIL import Image, ImageTk
 import importlib
+import time
 
 # 需要時會動態導入的模塊:
 # - moviepy (extract_audio_from_video)
@@ -25,6 +26,7 @@ import importlib
 # - pptx (generate_ppt_from_images)
 # - markitdown_helper (custom module for image to markdown conversion)
 # - importlib.util (for checking installed modules)
+# - selenium, pyautogui, webdriver-manager (web_capture_slides)
 
 def check_dependencies():
     """檢查必要依賴是否已安裝"""
@@ -35,11 +37,13 @@ def check_dependencies():
         "python-pptx", "scikit-image"
     ]
     
-    # 分開檢查 markitdown，因為它可選
+    # 分開檢查 markitdown 和 web 捕獲相關套件，因為它們是可選的
     optional_packages = ["markitdown"]
+    web_packages = ["selenium", "pyautogui", "webdriver-manager"]
     
     missing_packages = []
     missing_optional = []
+    missing_web = []
     
     for package in required_packages:
         try:
@@ -72,12 +76,25 @@ def check_dependencies():
         except ImportError:
             missing_optional.append(package)
     
+    for package in web_packages:
+        try:
+            spec = importlib.util.find_spec(package)
+            if spec is None:
+                missing_web.append(package)
+        except ImportError:
+            missing_web.append(package)
+    
     if missing_optional:
         print(f"注意: 未安裝可選套件: {', '.join(missing_optional)}")
         print("如果您想使用 MarkItDown 處理功能，請安裝:")
         print("pip install markitdown>=0.1.1")
     
-    return missing_packages
+    if missing_web:
+        print(f"注意: 未安裝網頁捕獲套件: {', '.join(missing_web)}")
+        print("如果您想使用網頁捕獲功能，請安裝:")
+        print(f"pip install {' '.join(missing_web)}")
+    
+    return missing_packages + missing_web
 
 
 def install_dependencies(packages):
@@ -240,7 +257,8 @@ def capture_slides_from_video(video_path, output_folder=None, similarity_thresho
         return False, error_msg
 
 
-def generate_ppt_from_images(image_folder, output_file=None, title="視頻捕獲的幻燈片"):
+def generate_ppt_from_images(image_folder, output_file=None, title="視頻捕獲的幻燈片", 
+                             image_files=None, slide_ratio="16:9"):
     """
     將圖片文件夾轉換為 PowerPoint 文件
     
@@ -248,6 +266,8 @@ def generate_ppt_from_images(image_folder, output_file=None, title="視頻捕獲
         image_folder: 包含幻燈片圖片的文件夾
         output_file: 輸出的 PowerPoint 文件路徑，默認為文件夾名+.pptx
         title: 演示文稿標題
+        image_files: 已排序的圖片文件列表，若為 None 則自動從文件夾獲取
+        slide_ratio: 幻燈片比例，支持 "16:9" 或 "4:3"
         
     返回:
         success: 是否成功
@@ -263,19 +283,28 @@ def generate_ppt_from_images(image_folder, output_file=None, title="視頻捕獲
                 os.path.dirname(image_folder), 
                 f"{os.path.basename(image_folder)}.pptx"
             )
-            
-        # 創建新的 PowerPoint 演示文稿
+        
+        # 創建新的 PowerPoint 演示文稿，根據選擇的比例
         prs = Presentation()
+        
+        # 設置幻燈片大小 (預設單位是 EMU, 1 英寸 = 914400 EMU)
+        if slide_ratio == "16:9":
+            prs.slide_width = 9144000  # 10 英寸 (16 單位寬)
+            prs.slide_height = 5143500  # 5.625 英寸 (9 單位高)
+        elif slide_ratio == "4:3":
+            prs.slide_width = 9144000  # 10 英寸 (4 單位寬)
+            prs.slide_height = 6858000  # 7.5 英寸 (3 單位高)
         
         # 獲取幻燈片尺寸
         slide_width = prs.slide_width
         slide_height = prs.slide_height
         
-        # 獲取所有圖片文件
-        image_files = []
-        for filename in sorted(os.listdir(image_folder)):
-            if filename.lower().endswith(('.png', '.jpg', '.jpeg')):
-                image_files.append(os.path.join(image_folder, filename))
+        # 如果未提供圖片文件列表，則從文件夾獲取
+        if image_files is None:
+            image_files = []
+            for filename in sorted(os.listdir(image_folder)):
+                if filename.lower().endswith(('.png', '.jpg', '.jpeg')):
+                    image_files.append(os.path.join(image_folder, filename))
                 
         if not image_files:
             return False, "未找到圖片文件"
@@ -285,7 +314,8 @@ def generate_ppt_from_images(image_folder, output_file=None, title="視頻捕獲
         title_slide = prs.slides.add_slide(title_slide_layout)
         title_slide.shapes.title.text = title
         if hasattr(title_slide.placeholders, 'subtitle'):
-            title_slide.placeholders[1].text = f"包含 {len(image_files)} 張幻燈片"
+            subtitle = f"包含 {len(image_files)} 張幻燈片 ({slide_ratio})"
+            title_slide.placeholders[1].text = subtitle
             
         # 為每張圖片創建一個幻燈片
         blank_slide_layout = prs.slide_layouts[6]  # 空白布局
@@ -295,7 +325,7 @@ def generate_ppt_from_images(image_folder, output_file=None, title="視頻捕獲
             
             # 添加圖片
             left = top = Inches(0)
-            img = slide.shapes.add_picture(
+            slide.shapes.add_picture(
                 img_path, left, top, width=slide_width, height=slide_height
             )
             
@@ -490,6 +520,10 @@ class VideoAudioProcessor:
         self.process_frame = ttk.Frame(self.notebook)
         self.notebook.add(self.process_frame, text="幻燈片處理")
         
+        # 第四個選項卡：PPT Slide 製作（從截圖文件夾生成）
+        self.web_capture_frame = ttk.Frame(self.notebook)
+        self.notebook.add(self.web_capture_frame, text="PPT Slide 製作")
+        
         # 設置音頻提取 UI
         self.setup_audio_ui()
         
@@ -498,6 +532,9 @@ class VideoAudioProcessor:
         
         # 設置幻燈片處理 UI
         self.setup_process_ui()
+        
+        # 設置網頁捕獲 UI
+        self.setup_web_capture_ui()
     
     def setup_audio_ui(self):
         """設置音頻提取界面"""
@@ -1046,6 +1083,323 @@ class VideoAudioProcessor:
             # 顯示處理結果
             result_text = "\n".join(results)
             messagebox.showerror("錯誤", f"幻燈片處理失敗:\n{result_text}")
+
+    def setup_web_capture_ui(self):
+        """設置網頁捕獲界面"""
+        frame = self.web_capture_frame
+        
+        # 頂部說明文字
+        info_label = tk.Label(
+            frame, 
+            text="此功能可從截圖文件夾直接生成 PowerPoint 投影片",
+            font=("Arial", 12)
+        )
+        info_label.pack(pady=20)
+        
+        # 截圖文件夾選擇區域
+        folder_frame = tk.Frame(frame)
+        folder_frame.pack(fill=tk.X, pady=10)
+        
+        tk.Label(folder_frame, text="截圖文件夾:").pack(side=tk.LEFT, padx=10)
+        self.screenshots_folder_entry = tk.Entry(folder_frame, width=50)
+        self.screenshots_folder_entry.pack(
+            side=tk.LEFT, padx=5, fill=tk.X, expand=True
+        )
+        
+        self.screenshots_browse_btn = tk.Button(
+            folder_frame, text="瀏覽...", 
+            command=self.browse_screenshots_folder
+        )
+        self.screenshots_browse_btn.pack(side=tk.LEFT, padx=5)
+        
+        # 輸出 PPT 文件選擇
+        output_frame = tk.Frame(frame)
+        output_frame.pack(fill=tk.X, pady=10)
+        
+        tk.Label(output_frame, text="輸出 PPT 文件:").pack(side=tk.LEFT, padx=10)
+        self.ppt_output_entry = tk.Entry(output_frame, width=50)
+        self.ppt_output_entry.pack(
+            side=tk.LEFT, padx=5, fill=tk.X, expand=True
+        )
+        
+        self.ppt_browse_btn = tk.Button(
+            output_frame, text="瀏覽...", 
+            command=self.browse_ppt_output
+        )
+        self.ppt_browse_btn.pack(side=tk.LEFT, padx=5)
+        
+        # 標題設置
+        title_frame = tk.Frame(frame)
+        title_frame.pack(fill=tk.X, pady=10)
+        
+        tk.Label(title_frame, text="PPT 標題:").pack(side=tk.LEFT, padx=10)
+        self.ppt_title_entry = tk.Entry(title_frame, width=50)
+        self.ppt_title_entry.pack(side=tk.LEFT, padx=5, fill=tk.X, expand=True)
+        self.ppt_title_entry.insert(0, "截圖生成的投影片")
+        
+        # 投影片比例選擇
+        ratio_frame = tk.Frame(frame)
+        ratio_frame.pack(fill=tk.X, pady=10)
+        
+        tk.Label(ratio_frame, text="投影片比例:").pack(side=tk.LEFT, padx=10)
+        
+        self.slide_ratio_var = tk.StringVar(value="16:9")
+        
+        tk.Radiobutton(
+            ratio_frame, text="寬屏 (16:9)", 
+            variable=self.slide_ratio_var, value="16:9"
+        ).pack(side=tk.LEFT, padx=5)
+        
+        tk.Radiobutton(
+            ratio_frame, text="標準 (4:3)", 
+            variable=self.slide_ratio_var, value="4:3"
+        ).pack(side=tk.LEFT, padx=5)
+        
+        # 圖片排序選項
+        sort_frame = tk.Frame(frame)
+        sort_frame.pack(fill=tk.X, pady=10)
+        
+        tk.Label(sort_frame, text="圖片排序:").pack(side=tk.LEFT, padx=10)
+        
+        self.sort_option_var = tk.StringVar(value="name")
+        
+        tk.Radiobutton(
+            sort_frame, text="按文件名排序", 
+            variable=self.sort_option_var, value="name"
+        ).pack(side=tk.LEFT, padx=5)
+        
+        tk.Radiobutton(
+            sort_frame, text="按修改時間排序", 
+            variable=self.sort_option_var, value="time"
+        ).pack(side=tk.LEFT, padx=5)
+        
+        # 圖片預覽框架
+        preview_frame = tk.Frame(frame)
+        preview_frame.pack(fill=tk.BOTH, expand=True, pady=10)
+        
+        # 預覽標籤
+        tk.Label(
+            preview_frame, text="圖片預覽 (顯示前 5 張):"
+        ).pack(pady=5)
+        
+        # 預覽區域
+        self.preview_canvas = tk.Canvas(
+            preview_frame, bg="white", height=150
+        )
+        self.preview_canvas.pack(fill=tk.X, expand=True, padx=10)
+        
+        # 狀態顯示
+        self.slide_make_status_var = tk.StringVar(value="準備就緒")
+        status_label = tk.Label(
+            frame, textvariable=self.slide_make_status_var,
+            font=("Arial", 10), fg="blue"
+        )
+        status_label.pack(pady=10)
+        
+        # 生成按鈕
+        self.make_ppt_btn = tk.Button(
+            frame, text="生成 PowerPoint", 
+            command=self.make_ppt_from_screenshots,
+            bg="#4CAF50", fg="white", height=2, width=20
+        )
+        self.make_ppt_btn.pack(pady=20)
+        
+    def browse_screenshots_folder(self):
+        """瀏覽並選擇截圖文件夾"""
+        folder_path = filedialog.askdirectory(
+            initialdir=".",
+            title="選擇包含截圖的文件夾"
+        )
+        if folder_path:
+            self.screenshots_folder_entry.delete(0, tk.END)
+            self.screenshots_folder_entry.insert(0, folder_path)
+            
+            # 更新輸出 PPT 名稱
+            folder_name = os.path.basename(folder_path)
+            ppt_path = os.path.join(
+                os.path.dirname(folder_path),
+                f"{folder_name}.pptx"
+            )
+            
+            self.ppt_output_entry.delete(0, tk.END)
+            self.ppt_output_entry.insert(0, ppt_path)
+            
+            # 更新預覽
+            self.update_preview()
+            
+    def browse_ppt_output(self):
+        """選擇 PPT 輸出文件"""
+        file_path = filedialog.asksaveasfilename(
+            initialdir=".",
+            title="保存 PowerPoint 文件",
+            filetypes=[("PowerPoint 文件", "*.pptx")]
+        )
+        if file_path:
+            if not file_path.lower().endswith(".pptx"):
+                file_path += ".pptx"
+                
+            self.ppt_output_entry.delete(0, tk.END)
+            self.ppt_output_entry.insert(0, file_path)
+    
+    def update_preview(self):
+        """更新圖片預覽"""
+        folder_path = self.screenshots_folder_entry.get()
+        if not folder_path or not os.path.isdir(folder_path):
+            return
+            
+        # 清除現有預覽
+        self.preview_canvas.delete("all")
+        
+        # 獲取所有圖片文件
+        image_files = self.get_image_files_sorted()
+        
+        if not image_files:
+            self.preview_canvas.create_text(
+                self.preview_canvas.winfo_width() // 2, 
+                self.preview_canvas.winfo_height() // 2,
+                text="找不到圖片文件",
+                font=("Arial", 14)
+            )
+            return
+            
+        # 只顯示前 5 張
+        preview_count = min(5, len(image_files))
+        preview_images = []
+        
+        # 計算每張預覽圖的大小和位置
+        canvas_width = self.preview_canvas.winfo_width()
+        if canvas_width < 100:  # 如果畫布尚未渲染，使用預設寬度
+            canvas_width = 500
+            
+        preview_width = (canvas_width - 10 * (preview_count + 1)) // preview_count
+        preview_height = 130
+        
+        # 載入並顯示預覽圖
+        for i in range(preview_count):
+            try:
+                # 打開圖片並調整大小
+                img = Image.open(image_files[i])
+                img.thumbnail((preview_width, preview_height), Image.LANCZOS)
+                
+                # 轉換為 PhotoImage
+                photo = ImageTk.PhotoImage(img)
+                preview_images.append(photo)  # 保持引用
+                
+                # 計算位置
+                x = 10 + i * (preview_width + 10)
+                
+                # 在畫布上顯示圖片
+                self.preview_canvas.create_image(x, 10, image=photo, anchor=tk.NW)
+                
+                # 顯示文件名
+                filename = os.path.basename(image_files[i])
+                if len(filename) > 15:
+                    filename = filename[:12] + "..."
+                
+                self.preview_canvas.create_text(
+                    x + preview_width // 2, 
+                    preview_height + 20,
+                    text=filename,
+                    font=("Arial", 8)
+                )
+                
+            except Exception as e:
+                print(f"無法載入預覽圖: {e}")
+        
+        # 保持圖片引用，避免垃圾回收
+        self.preview_canvas.preview_images = preview_images
+    
+    def get_image_files_sorted(self):
+        """獲取排序後的圖片文件列表"""
+        folder_path = self.screenshots_folder_entry.get()
+        if not folder_path or not os.path.isdir(folder_path):
+            return []
+            
+        # 獲取所有圖片文件
+        image_files = []
+        for filename in os.listdir(folder_path):
+            if filename.lower().endswith(('.png', '.jpg', '.jpeg')):
+                image_files.append(os.path.join(folder_path, filename))
+                
+        # 根據選擇的排序方式進行排序
+        sort_option = self.sort_option_var.get()
+        
+        if sort_option == "name":
+            # 按文件名排序
+            image_files.sort()
+        elif sort_option == "time":
+            # 按修改時間排序
+            image_files.sort(key=os.path.getmtime)
+            
+        return image_files
+    
+    def make_ppt_from_screenshots(self):
+        """從截圖生成 PowerPoint"""
+        folder_path = self.screenshots_folder_entry.get()
+        output_path = self.ppt_output_entry.get()
+        title = self.ppt_title_entry.get()
+        slide_ratio = self.slide_ratio_var.get()
+        
+        if not folder_path:
+            messagebox.showwarning("警告", "請選擇截圖文件夾")
+            return
+            
+        if not os.path.isdir(folder_path):
+            messagebox.showerror("錯誤", f"文件夾不存在: {folder_path}")
+            return
+            
+        # 獲取排序後的圖片文件
+        image_files = self.get_image_files_sorted()
+        
+        if not image_files:
+            messagebox.showwarning("警告", "選定的文件夾中未找到圖片")
+            return
+            
+        # 確保輸出路徑有效
+        if not output_path or output_path.strip() == "" or output_path.strip() == ".pptx":
+            # 使用截圖文件夾名稱作為檔案名
+            folder_name = os.path.basename(folder_path)
+            if not folder_name or folder_name.strip() == "":
+                folder_name = "投影片"  # 默認檔案名
+                
+            output_path = os.path.join(
+                os.path.dirname(folder_path),
+                f"{folder_name}.pptx"
+            )
+            self.ppt_output_entry.delete(0, tk.END)
+            self.ppt_output_entry.insert(0, output_path)
+        elif not output_path.lower().endswith(".pptx"):
+            # 確保有正確的副檔名
+            output_path += ".pptx"
+            self.ppt_output_entry.delete(0, tk.END)
+            self.ppt_output_entry.insert(0, output_path)
+            
+        # 開始生成（在背景線程中運行）
+        self.slide_make_status_var.set("正在生成 PowerPoint...")
+        self.make_ppt_btn.config(state=tk.DISABLED)
+        
+        def generate_thread():
+            success, result = generate_ppt_from_images(
+                folder_path, output_path, title, image_files, slide_ratio
+            )
+            
+            # 在主線程中更新 UI
+            self.root.after(
+                0, lambda: self.ppt_generation_completed(success, result)
+            )
+        
+        threading.Thread(target=generate_thread).start()
+    
+    def ppt_generation_completed(self, success, result):
+        """PowerPoint 生成完成後的處理"""
+        self.make_ppt_btn.config(state=tk.NORMAL)
+        
+        if success:
+            self.slide_make_status_var.set("PowerPoint 生成成功")
+            messagebox.showinfo("成功", f"PowerPoint 已成功生成: {result}")
+        else:
+            self.slide_make_status_var.set(f"PowerPoint 生成失敗: {result}")
+            messagebox.showerror("錯誤", f"PowerPoint 生成失敗: {result}")
 
 
 def main():
