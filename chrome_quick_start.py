@@ -9,7 +9,6 @@ import sys
 import tkinter as tk
 from tkinter import messagebox
 import traceback
-import os
 import subprocess
 import importlib
 
@@ -87,7 +86,8 @@ def main():
             "2. 在打開的頁面中播放視頻\n"
             "3. 框選要監控的投影片區域\n"
             "4. 點擊「開始捕獲」開始監控並截取投影片\n"
-            "5. 完成後點擊「停止」並選擇「生成PPT」\n\n"
+            "5. 完成後點擊「停止」\n"
+            "6. 使用「Slide 製作」功能處理截取的投影片\n\n"
             "提示：調整相似度閾值可以控制檢測靈敏度，值越低檢測越靈敏"
         )
         
