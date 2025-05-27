@@ -1,0 +1,55 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+
+# 虛擬環境
+venv/
+env/
+ENV/
+
+# 項目特定文件
+slides/
+*.mp4
+*.avi
+*.mov
+*.mkv
+*.pptx
+*.ppt
+*.png
+*.jpg
+*.jpeg
+
+# 系統文件
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# 臨時文件和備份
+temp_repo/
+temp_repo_clean/
+*.bak
+test_*.py 
