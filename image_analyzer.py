@@ -67,6 +67,9 @@ def compress_image(image_path: str, max_size_mb: float = 1.0) -> str:
         
         # 壓縮圖片
         buffer = BytesIO()
+        # 轉換為 RGB 以處理 RGBA 圖片的 JPEG 儲存問題
+        if img.mode == 'RGBA':
+            img = img.convert('RGB')
         img.save(buffer, format="JPEG", quality=quality)
         buffer.seek(0)
         
@@ -177,13 +180,15 @@ def analyze_image(
                     },
                     {
                         "category": (
-                            genai_types.HarmCategory.HARM_CATEGORY_SEXUALLY_EXPLICIT
+                            genai_types.HarmCategory.
+                            HARM_CATEGORY_SEXUALLY_EXPLICIT
                         ),
                         "threshold": genai_types.HarmBlockThreshold.BLOCK_NONE
                     },
                     {
                         "category": (
-                            genai_types.HarmCategory.HARM_CATEGORY_DANGEROUS_CONTENT
+                            genai_types.HarmCategory.
+                            HARM_CATEGORY_DANGEROUS_CONTENT
                         ),
                         "threshold": genai_types.HarmBlockThreshold.BLOCK_NONE
                     }
@@ -209,8 +214,50 @@ def analyze_image(
                             candidate = response.candidates[0]
                             if candidate.finish_reason == 2:  # SAFETY
                                 logger.warning("內容被 Gemini 安全過濾器阻擋")
+                                
+                                # 如果是第一次嘗試，改用更中性的提示重試
+                                if attempt == 0:
+                                    logger.info(
+                                        "嘗試使用更中性的提示重新分析..."
+                                    )
+                                    neutral_prompt = (
+                                        "請以專業、學術的方式描述這張圖片的"
+                                        "內容。僅關注可見的文字、圖表、數據"
+                                        "和版面配置。請使用繁體中文回應。"
+                                    )
+                                    response = gemini_model.generate_content(
+                                        [neutral_prompt, img]
+                                    )
+                                    
+                                    # 再次檢查回應
+                                    if (response.candidates and 
+                                            len(response.candidates) > 0 and
+                                            response.candidates[0].finish_reason 
+                                            != 2):
+                                        if (hasattr(response, 'text') and 
+                                                response.text):
+                                            analysis = response.text
+                                            return True, analysis
+                                
+                                # 如果仍然被阻擋，檢查是否有 OpenAI API Key
+                                # openai_key = os.environ.get("OPENAI_API_KEY")
+                                # if openai_key and attempt < max_retries:
+                                #     logger.info(
+                                #         "Gemini 被阻擋，嘗試切換到 OpenAI API..."
+                                #     )
+                                #     return analyze_image(
+                                #         image_path=image_path,
+                                #         api_key=openai_key,
+                                #         model="gpt-4o-mini",
+                                #         provider="openai"
+                                #     )
+                                
                                 return False, (
-                                    "內容被安全過濾器阻擋，請嘗試使用其他圖片"
+                                    "內容被安全過濾器阻擋。建議：\n"
+                                    # "1. 使用 OpenAI API 替代\n"  <-- 保留此建議但不再自動切換
+                                    "1. 檢查圖片是否包含敏感內容\n"
+                                    "2. 嘗試裁剪或編輯圖片後重試\n"
+                                    "3. 手動嘗試使用 OpenAI API (如果可用)"
                                 )
                             elif candidate.finish_reason == 3:  # RECITATION
                                 logger.warning("內容因版權問題被阻擋")
