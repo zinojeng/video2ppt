@@ -13,9 +13,7 @@ import sys
 import logging
 import argparse
 import glob
-from pathlib import Path
 from typing import Dict, List, Optional, Tuple, Any
-import time
 
 # 設定日誌
 logging.basicConfig(
@@ -32,7 +30,8 @@ def convert_images_to_markdown(
     use_llm: bool = True,
     api_key: Optional[str] = None,
     model: str = "gpt-4o-mini",
-    provider: str = "openai"
+    provider: str = "openai",
+    is_academic_mode: bool = False
 ) -> Tuple[bool, str, Dict[str, Any]]:
     """
     將多個圖片檔案轉換為單一 Markdown 檔案
@@ -45,6 +44,7 @@ def convert_images_to_markdown(
         api_key (Optional[str]): API Key (OpenAI 或 Google)
         model (str): 使用的模型名稱
         provider (str): API 提供者，可為 'openai' 或 'gemini'
+        is_academic_mode (bool): 是否啟用學術模式，影響 LLM 提示詞
         
     Returns:
         Tuple[bool, str, Dict]: (是否成功, 輸出檔案路徑, 處理資訊)
@@ -63,7 +63,8 @@ def convert_images_to_markdown(
                     return False, "", {"error": "缺少 Google Generative AI 模組"}
             else:  # 默認為 OpenAI
                 try:
-                    from openai import OpenAI, AuthenticationError
+                    # 將 OpenAI 和 AuthenticationError 移到這裡，避免重複定義
+                    from openai import OpenAI
                 except ImportError:
                     logger.error("找不到 openai 模組，請確保已安裝相關套件")
                     return False, "", {"error": "缺少 OpenAI 模組"}
@@ -114,7 +115,8 @@ def convert_images_to_markdown(
                         # 測試 API Key 是否有效
                         try:
                             # 簡單測試，列出可用模型
-                            models = list(genai.list_models())
+                            # models = list(genai.list_models()) # 移除未使用的變數
+                            genai.list_models() # 只呼叫函數，不儲存結果
                             logger.info("Google API Key 驗證成功。")
                             llm_info["status"] = "啟用成功"
                             llm_info["model"] = model
@@ -140,8 +142,8 @@ def convert_images_to_markdown(
                     use_llm = False
                 else:
                     try:
-                        # 初始化 OpenAI 客戶端
-                        from openai import OpenAI, AuthenticationError
+                        # 不再重複導入 OpenAI 和 AuthenticationError
+                        # from openai import OpenAI, AuthenticationError 
                         llm_client = OpenAI(api_key=current_api_key)
                         # 執行一個簡單的測試呼叫來驗證金鑰
                         llm_client.models.list() 
@@ -184,9 +186,19 @@ def convert_images_to_markdown(
                 
         # 寫入輸出檔案
         try:
+            # 確保輸出目錄存在
+            output_dir = os.path.dirname(output_file)
+            if output_dir and not os.path.exists(output_dir):
+                os.makedirs(output_dir)
+                
             with open(output_file, 'w', encoding='utf-8') as f:
                 f.write(md_content)
-            logger.info(f"已將 {successful_conversions} 張圖片轉換並寫入 {output_file}")
+            
+            # 修正日誌訊息，反映實際情況
+            if successful_conversions > 0:
+                logger.info(f"已將 {successful_conversions} 張圖片轉換並寫入 {output_file}")
+            else:
+                logger.info(f"已創建包含 {len(valid_images)} 張圖片標記的 Markdown 檔案: {output_file}")
             
             # 嘗試使用 image_analyzer 增強圖片描述
             if use_llm and os.path.exists(output_file):
@@ -205,14 +217,17 @@ def convert_images_to_markdown(
                             base_dir=os.path.dirname(output_file),
                             api_key=current_api_key,
                             model=model,
-                            provider=provider
+                            provider=provider,
+                            is_academic_mode=is_academic_mode
                         )
                         
                         # 寫入增強後的內容
                         with open(output_file, 'w', encoding='utf-8') as f:
                             f.write(enhanced_md)
                         
-                        logger.info(f"已增強 {stats['images_processed']} 張圖片的描述")
+                        logger.info(
+                            f"已增強 {stats['images_processed']} 張圖片的描述"
+                        )
                     except ImportError:
                         logger.warning("找不到 image_analyzer 模組，無法增強圖片描述")
                 except Exception as e:
@@ -267,7 +282,7 @@ def generate_ppt_from_markdown(
         # 嘗試導入 python-pptx
         try:
             from pptx import Presentation
-            from pptx.util import Inches, Pt
+            from pptx.util import Inches
             import markdown
             from bs4 import BeautifulSoup
         except ImportError:
@@ -398,7 +413,8 @@ def process_images_to_ppt(
     api_key: Optional[str] = None,
     model: str = "gpt-4o-mini",
     provider: str = "openai",
-    template_file: Optional[str] = None
+    template_file: Optional[str] = None,
+    is_academic_mode: bool = False
 ) -> bool:
     """
     處理資料夾中的圖片，轉換為 Markdown 並生成 PPT
@@ -413,6 +429,7 @@ def process_images_to_ppt(
         model (str): 使用的模型名稱
         provider (str): API 提供者，可為 'openai' 或 'gemini'
         template_file (Optional[str]): PPT 模板檔案路徑
+        is_academic_mode (bool): 是否啟用學術模式，影響 LLM 提示詞
         
     Returns:
         bool: 是否成功生成 PPT
@@ -452,7 +469,8 @@ def process_images_to_ppt(
             use_llm=use_llm,
             api_key=api_key,
             model=model,
-            provider=provider
+            provider=provider,
+            is_academic_mode=is_academic_mode
         )
         
         if not success:
@@ -487,7 +505,8 @@ def process_captured_slides(
     output_format: str = "markdown", 
     api_key: Optional[str] = None, 
     model: str = "gpt-4o-mini",
-    provider: str = "openai"
+    provider: str = "openai",
+    is_academic_mode: bool = False
 ) -> bool:
     """
     處理已捕獲的投影片，生成 Markdown 或 PowerPoint 或兩者都生成
@@ -498,6 +517,7 @@ def process_captured_slides(
         api_key (Optional[str]): API Key (OpenAI 或 Google)
         model (str): 使用的模型名稱
         provider (str): API 提供者，可為 'openai' 或 'gemini'
+        is_academic_mode (bool): 是否啟用學術模式，影響 LLM 提示詞
         
     Returns:
         bool: 處理是否成功
@@ -525,7 +545,7 @@ def process_captured_slides(
     # 處理 Markdown
     if output_format in ["markdown", "both"]:
         output_md = os.path.join(
-            os.path.dirname(slides_folder), 
+            slides_folder, 
             "slides_analysis.md"
         )
         
@@ -536,7 +556,8 @@ def process_captured_slides(
             use_llm=(api_key is not None),
             api_key=api_key,
             model=model,
-            provider=provider
+            provider=provider,
+            is_academic_mode=is_academic_mode
         )
         
         if not md_success:
@@ -546,7 +567,7 @@ def process_captured_slides(
     # 處理 PPT
     if output_format in ["pptx", "both"]:
         output_ppt = os.path.join(
-            os.path.dirname(slides_folder), 
+            slides_folder, 
             "slides.pptx"
         )
         
@@ -557,7 +578,8 @@ def process_captured_slides(
             use_llm=(api_key is not None),
             api_key=api_key,
             model=model,
-            provider=provider
+            provider=provider,
+            is_academic_mode=is_academic_mode
         )
         
         if not ppt_success:

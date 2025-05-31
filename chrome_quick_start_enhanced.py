@@ -99,7 +99,8 @@ def process_captured_slides(
     output_format="markdown", 
     api_key=None, 
     model="gpt-4o-mini",
-    provider="openai"
+    provider="openai",
+    is_academic_mode=False
 ):
     """處理已捕獲的投影片，生成 Markdown 或增強的文字分析"""
     try:
@@ -125,7 +126,7 @@ def process_captured_slides(
         if output_format == "markdown" or output_format == "both":
             # 轉換為 Markdown
             output_md = os.path.join(
-                os.path.dirname(slides_folder), 
+                slides_folder,  # 改為直接在投影片資料夾內
                 "slides_analysis.md"
             )
             success, md_file, info = convert_images_to_markdown(
@@ -134,7 +135,9 @@ def process_captured_slides(
                 title="投影片內容分析",
                 use_llm=(api_key is not None),
                 api_key=api_key,
-                model=model
+                model=model,
+                provider=provider,
+                is_academic_mode=is_academic_mode
             )
             
             if success:
@@ -149,7 +152,7 @@ def process_captured_slides(
         if output_format == "pptx" or output_format == "both":
             # 生成 PPT
             output_ppt = os.path.join(
-                os.path.dirname(slides_folder), 
+                slides_folder,  # 改為直接在投影片資料夾內
                 "slides.pptx"
             )
             if process_images_to_ppt(
@@ -158,7 +161,9 @@ def process_captured_slides(
                 title="投影片簡報",
                 use_llm=(api_key is not None),
                 api_key=api_key,
-                model=model
+                model=model,
+                provider=provider,
+                is_academic_mode=is_academic_mode
             ):
                 messagebox.showinfo("成功", f"已生成 PPT 檔案: {output_ppt}")
             else:
@@ -178,7 +183,8 @@ def process_with_image_analyzer(
     output_file=None, 
     api_key=None, 
     model="o4-mini",
-    provider="openai"
+    provider="openai",
+    is_academic_mode=False
 ):
     """使用 OpenAI、Gemini 或 DeepSeek 模型分析圖片內容"""
     try:
@@ -202,7 +208,7 @@ def process_with_image_analyzer(
         if not output_file:
             provider_name = provider.lower()
             output_file = os.path.join(
-                os.path.dirname(slides_folder), 
+                slides_folder,  # 改為直接在投影片資料夾內
                 f"slides_{provider_name}_analysis.md"
             )
             
@@ -245,7 +251,8 @@ def process_with_image_analyzer(
                     image_path=img_path,
                     api_key=current_api_key,
                     model=model,
-                    provider=provider
+                    provider=provider,
+                    is_academic_mode=is_academic_mode
                 )
                 
                 if success:
@@ -492,7 +499,7 @@ class EnhancedChromeCapture:
         self.model_var = tk.StringVar(value="gpt-4o-mini")
         self.openai_models = ["gpt-4o-mini", "gpt-4o", "o4-mini", "o4"]
         self.gemini_models = [
-            "gemini-2.5-pro-exp-03-25",
+            "gemini-2.5-pro-preview-03-25",
             "gemini-2.5-flash-preview-05-20"
         ]
         
@@ -551,6 +558,13 @@ class EnhancedChromeCapture:
         tk.Radiobutton(
             method_frame, text="使用視覺模型", 
             variable=self.method_var, value="openai"
+        ).pack(side=tk.LEFT, padx=5)
+        
+        # 學術模式選擇
+        self.academic_mode = tk.BooleanVar(value=False)
+        tk.Checkbutton(
+            method_frame, text="學術模式 (避免敏感詞)",
+            variable=self.academic_mode
         ).pack(side=tk.LEFT, padx=5)
         
         # 按鈕區域
@@ -884,6 +898,7 @@ class EnhancedChromeCapture:
         provider = self.provider_var.get()  # 獲取提供者選項
         method = self.method_var.get()  # 獲取處理方式：markitdown 或 openai
         output_format = self.format_var.get()  # 獲取輸出格式
+        academic_mode = self.academic_mode.get()  # 獲取學術模式選項
         
         # 檢查輸入
         if not folder_path:
@@ -914,7 +929,8 @@ class EnhancedChromeCapture:
                 output_format=pct_format,
                 api_key=api_key,
                 model=model,
-                provider=provider
+                provider=provider,
+                is_academic_mode=academic_mode
             )
             
             if success:
@@ -970,7 +986,8 @@ class EnhancedChromeCapture:
                 api_key=api_key,
                 model=model,
                 provider=provider,
-                output_file=None  # 使用預設輸出檔案
+                output_file=None,  # 使用預設輸出檔案
+                is_academic_mode=academic_mode
             )
             
             if result.get("success"):

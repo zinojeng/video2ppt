@@ -87,7 +87,8 @@ def analyze_image(
     image_path: str,
     api_key: str,
     model: str = "o4-mini",
-    provider: str = "openai"
+    provider: str = "openai",
+    is_academic_mode: bool = False
 ) -> Tuple[bool, str]:
     """
     使用 OpenAI、Gemini 或 DeepSeek API 分析圖片內容
@@ -97,6 +98,7 @@ def analyze_image(
         api_key (str): API Key (OpenAI、Google 或 DeepSeek)
         model (str): 使用的模型名稱
         provider (str): API 提供者，可為 'openai'、'gemini' 或 'deepseek'
+        is_academic_mode (bool): 是否為學術模式
     
     Returns:
         Tuple[bool, str]: (是否成功, 分析結果)
@@ -130,16 +132,32 @@ def analyze_image(
                 genai.configure(api_key=api_key)
                 
                 # 建立系統提示（專為 Gemini 優化以避免安全過濾）
-                gemini_prompt = (
-                    "請分析這張學術或商業簡報圖片的內容。\n\n"
-                    "請使用繁體中文回應，並包含：\n"
-                    "1. 簡報主題和標題\n"
-                    "2. 主要文字內容和重點\n"
-                    "3. 圖表數據的解釋（如有）\n"
-                    "4. 版面結構和設計元素\n"
-                    "5. 教育或商業用途的相關資訊\n\n"
-                    "請以專業、客觀的方式描述，專注於教育和商業內容。"
-                )
+                if is_academic_mode:
+                    gemini_prompt = (
+                        """請以符合安全政策的方式分析這張醫療、生物學或學術簡報圖片的內容。
+
+請使用繁體中文回應，並僅專注於提取客觀、技術和學術資訊，例如：
+1. 簡報主題、標題或圖表名稱
+2. 主要文字內容和關鍵術語
+3. 圖表數據的具體數值和解釋（如有）
+4. 版面結構、流程圖或解剖圖等設計元素
+5. 任何可見的教育、研究或商業用途的相關資訊
+
+請避免任何推斷、個人評價、或可能被解釋為敏感內容的描述。所有分析必須保持嚴格的學術或技術中立性。"""
+                    )
+                else:
+                    gemini_prompt = (
+                        """請以符合安全政策的方式分析這張學術或商業簡報圖片的內容。
+
+請使用繁體中文回應，並包含：
+1. 簡報主題和標題
+2. 主要文字內容和重點
+3. 圖表數據的解釋（如有）
+4. 版面結構和設計元素
+5. 教育或商業用途的相關資訊
+
+請以專業、客觀的方式描述，專注於教育和商業內容。"""
+                    )
                 
                 # 選擇適合的模型
                 # 直接使用傳入的模型名稱，因為 Gemini 的多模態模型名稱本身已包含視覺能力
@@ -158,7 +176,7 @@ def analyze_image(
                     "max_output_tokens": 2048,
                 }
                 
-                # 設定安全過濾器為最寬鬆的設定（適用於教育內容）
+                # 設定安全過濾器為僅阻擋高風險內容（更合理的設定）
                 import google.generativeai.types as genai_types
                 
                 safety_settings = [
@@ -167,7 +185,7 @@ def analyze_image(
                             genai_types.HarmCategory.HARM_CATEGORY_HARASSMENT
                         ),
                         "threshold": (
-                            genai_types.HarmBlockThreshold.BLOCK_NONE
+                            genai_types.HarmBlockThreshold.BLOCK_ONLY_HIGH
                         )
                     },
                     {
@@ -175,7 +193,7 @@ def analyze_image(
                             genai_types.HarmCategory.HARM_CATEGORY_HATE_SPEECH
                         ),
                         "threshold": (
-                            genai_types.HarmBlockThreshold.BLOCK_NONE
+                            genai_types.HarmBlockThreshold.BLOCK_ONLY_HIGH
                         )
                     },
                     {
@@ -183,14 +201,18 @@ def analyze_image(
                             genai_types.HarmCategory.
                             HARM_CATEGORY_SEXUALLY_EXPLICIT
                         ),
-                        "threshold": genai_types.HarmBlockThreshold.BLOCK_NONE
+                        "threshold": (
+                            genai_types.HarmBlockThreshold.BLOCK_ONLY_HIGH
+                        )
                     },
                     {
                         "category": (
                             genai_types.HarmCategory.
                             HARM_CATEGORY_DANGEROUS_CONTENT
                         ),
-                        "threshold": genai_types.HarmBlockThreshold.BLOCK_NONE
+                        "threshold": (
+                            genai_types.HarmBlockThreshold.BLOCK_ONLY_HIGH
+                        )
                     }
                 ]
                 
@@ -209,8 +231,10 @@ def analyze_image(
                         )
                         
                         # 檢查回應是否被安全過濾器阻擋
-                        if (response.candidates and
-                                len(response.candidates) > 0):
+                        if (
+                            response.candidates and
+                            len(response.candidates) > 0
+                        ):
                             candidate = response.candidates[0]
                             if candidate.finish_reason == 2:  # SAFETY
                                 logger.warning("內容被 Gemini 安全過濾器阻擋")
@@ -221,8 +245,8 @@ def analyze_image(
                                         "嘗試使用更中性的提示重新分析..."
                                     )
                                     neutral_prompt = (
-                                        "請以專業、學術的方式描述這張圖片的"
-                                        "內容。僅關注可見的文字、圖表、數據"
+                                        "請以符合安全政策的方式，專業、學術地描述這張圖片的" +
+                                        "內容。僅關注可見的文字、圖表、數據" +
                                         "和版面配置。請使用繁體中文回應。"
                                     )
                                     response = gemini_model.generate_content(
@@ -230,34 +254,41 @@ def analyze_image(
                                     )
                                     
                                     # 再次檢查回應
-                                    if (response.candidates and 
-                                            len(response.candidates) > 0 and
-                                            response.candidates[0].finish_reason 
-                                            != 2):
+                                    if (
+                                        response.candidates and 
+                                        len(response.candidates) > 0 and
+                                        response.candidates[0].finish_reason 
+                                        != 2
+                                    ):
                                         if (hasattr(response, 'text') and 
                                                 response.text):
                                             analysis = response.text
                                             return True, analysis
-                                
-                                # 如果仍然被阻擋，檢查是否有 OpenAI API Key
-                                # openai_key = os.environ.get("OPENAI_API_KEY")
-                                # if openai_key and attempt < max_retries:
-                                #     logger.info(
-                                #         "Gemini 被阻擋，嘗試切換到 OpenAI API..."
-                                #     )
-                                #     return analyze_image(
-                                #         image_path=image_path,
-                                #         api_key=openai_key,
-                                #         model="gpt-4o-mini",
-                                #         provider="openai"
-                                #     )
+                                # 在第一次重試仍然失敗後，嘗試更極簡的提示
+                                if attempt == 1:  # 第二次嘗試（第一次重試）
+                                    logger.info("二次嘗試失敗，嘗試使用極簡提示獲取原始文字...")
+                                    minimal_prompt = (
+                                        "請以符合安全政策的方式，客觀地提取這張圖片中所有可讀的繁體中文字符和數字，"
+                                        "並以原始順序呈現。請勿進行任何解釋或分析。如果無法提取文字，請回覆『無法提取文字』。"
+                                    )
+                                    response = gemini_model.generate_content(
+                                        [minimal_prompt, img]
+                                    )
+                                    if (hasattr(response, 'text') and response.text):
+                                        logger.info("已成功提取原始文字")
+                                        return True, (
+                                            "內容因安全過濾被部分阻擋，" +
+                                            "已嘗試提取原始文字：\\n\\n" +
+                                            response.text
+                                        )
                                 
                                 return False, (
-                                    "內容被安全過濾器阻擋。建議：\n"
-                                    # "1. 使用 OpenAI API 替代\n"  <-- 保留此建議但不再自動切換
-                                    "1. 檢查圖片是否包含敏感內容\n"
-                                    "2. 嘗試裁剪或編輯圖片後重試\n"
-                                    "3. 手動嘗試使用 OpenAI API (如果可用)"
+                                    "內容被安全過濾器阻擋。建議：\\n" +
+                                    "1. 檢查圖片是否包含過於敏感的醫療或解剖內容。\\n" +
+                                    "2. 嘗試裁剪或編輯圖片，去除可能引起誤判的區域後重試。\\n" +
+                                    "3. 確保已啟用『學術模式』以優化提示詞。\\n" +
+                                    "4. 考慮切換到 OpenAI API 或手動處理。\\n" +
+                                    "5. 若確認內容無害，可透過 Gemini API 錯誤回報系統提交案例。"
                                 )
                             elif candidate.finish_reason == 3:  # RECITATION
                                 logger.warning("內容因版權問題被阻擋")
@@ -395,11 +426,15 @@ def analyze_image(
                         if "429" in error_msg and attempt < max_retries:
                             # 速率限制錯誤，等待後重試
                             wait_time = retry_delay * (attempt + 1)
-                            logger.warning(f"API 速率限制，等待 {wait_time} 秒後重試...")
+                            logger.warning(
+                                f"API 速率限制，等待 {wait_time} 秒後重試..."
+                            )
                             time.sleep(wait_time)
                         elif attempt < max_retries:
                             # 其他錯誤，也嘗試重試
-                            logger.warning(f"請求失敗，等待 {retry_delay} 秒後重試...")
+                            logger.warning(
+                                f"請求失敗，等待 {retry_delay} 秒後重試..."
+                            )
                             time.sleep(retry_delay)
                         else:
                             # 已達最大重試次數，拋出異常
@@ -457,7 +492,8 @@ def enhance_markdown_with_image_analysis(
     base_dir: str = ".",
     api_key: Optional[str] = None,
     model: str = "o4-mini",
-    provider: str = "openai"
+    provider: str = "openai",
+    is_academic_mode: bool = False
 ) -> Tuple[str, Dict[str, int]]:
     """
     增強 Markdown 文件中的圖片描述
@@ -468,6 +504,7 @@ def enhance_markdown_with_image_analysis(
         api_key (Optional[str]): API Key (OpenAI 或 Google)
         model (str): 使用的模型
         provider (str): API 提供者，可為 'openai' 或 'gemini'
+        is_academic_mode (bool): 是否為學術模式
     
     Returns:
         Tuple[str, Dict[str, int]]: (增強後的 Markdown 文字, 處理統計)
@@ -513,8 +550,10 @@ def enhance_markdown_with_image_analysis(
         "images_failed": 0
     }
     
-    # 從後向前處理圖片，避免因替換而改變後續圖片的位置
-    for img_info in reversed(images):
+    # 按順序處理圖片，但需要記錄位置偏移
+    offset = 0  # 記錄因為插入內容而產生的位置偏移
+    
+    for img_info in images:
         # 獲取圖片路徑
         img_path = img_info["path"]
         
@@ -530,7 +569,8 @@ def enhance_markdown_with_image_analysis(
                 image_path=img_path,
                 api_key=api_key,
                 model=model,
-                provider=provider
+                provider=provider,
+                is_academic_mode=is_academic_mode
             )
             
             if success:
@@ -540,12 +580,19 @@ def enhance_markdown_with_image_analysis(
                     f"{analysis}\n"
                 )
                 
+                # 計算調整後的位置
+                adjusted_start = img_info['start'] + offset
+                adjusted_end = img_info['end'] + offset
+                
                 # 替換原始 Markdown
                 markdown_text = (
-                    markdown_text[:img_info['start']] +
+                    markdown_text[:adjusted_start] +
                     enhanced +
-                    markdown_text[img_info['end']:]
+                    markdown_text[adjusted_end:]
                 )
+                
+                # 更新偏移量
+                offset += len(enhanced) - (img_info['end'] - img_info['start'])
                 
                 stats["images_analyzed"] += 1
                 logger.info(f"成功分析圖片: {img_path}")
@@ -589,6 +636,11 @@ if __name__ == "__main__":
         help="API 提供者，可為 'openai' 或 'gemini'"
     )
     parser.add_argument(
+        "--academic-mode", "-a",
+        action="store_true",
+        help="啟用學術模式"
+    )
+    parser.add_argument(
         "--verbose", "-v",
         action="store_true",
         help="顯示詳細資訊"
@@ -618,7 +670,8 @@ if __name__ == "__main__":
         base_dir=os.path.dirname(os.path.abspath(args.input_file)),
         api_key=args.api_key,
         model=args.model,
-        provider=args.provider
+        provider=args.provider,
+        is_academic_mode=args.academic_mode
     )
     
     # 寫入輸出檔案
