@@ -12,7 +12,7 @@
 import os
 import sys
 import tkinter as tk
-from tkinter import ttk, filedialog, messagebox
+from tkinter import ttk, filedialog, messagebox, simpledialog
 import subprocess
 import traceback
 import threading
@@ -52,6 +52,16 @@ def check_dependencies():
             # 處理 opencv-python 特例
             if package == "opencv-python":
                 import_name = "cv2"
+                # 新增：檢查 OpenCV 是否能正確導入
+                spec = importlib.util.find_spec(import_name)
+                if spec is None:
+                    missing_packages.append(package)
+                else:
+                    # 實際導入測試
+                    import cv2
+                    # 測試基本功能
+                    if not hasattr(cv2, 'VideoCapture'):
+                        missing_packages.append(package)
             # 處理 python-pptx 特例
             elif package == "python-pptx":
                 import_name = "pptx"
@@ -67,6 +77,11 @@ def check_dependencies():
                 missing_packages.append(package)
         except ImportError:
             missing_packages.append(package)
+        except Exception as e:
+            # 新增：OpenCV 導入失敗的特別處理
+            if package == "opencv-python":
+                print(f"OpenCV 導入失敗: {str(e)}")
+                missing_packages.append(package)
     
     for package in optional_packages:
         try:
@@ -152,105 +167,177 @@ def extract_audio_from_video(video_path, output_path=None, format="mp3"):
         return False, error_msg
 
 
-def capture_slides_from_video(video_path, output_folder=None, similarity_threshold=0.8):
+def capture_slides_from_video(video_path, output_folder=None, 
+                             similarity_threshold=0.7, crop_region=None, 
+                             stability_threshold=0.95, sample_interval=0.5,
+                             stop_flag=False):
     """
     從視頻文件中捕獲幻燈片
     
     參數:
         video_path: 視頻文件路徑
-        output_folder: 輸出幻燈片圖片的文件夾，默認為 video_slides
-        similarity_threshold: 圖像相似度閾值，用於檢測幻燈片變化，值越低檢測越敏感
-        
-    返回:
-        success: 是否成功
-        result: 包含提取信息的字典或錯誤信息
+        output_folder: 輸出幻燈片圖片的文件夾
+        similarity_threshold: 圖像相似度閾值
+        crop_region: 裁剪區域 (x, y, width, height) 或 None
+        stability_threshold: 畫面穩定性閾值
+        sample_interval: 取樣間隔（秒）
+        stop_flag: 停止捕獲標誌
     """
     try:
         import cv2
-        import numpy as np
         from skimage.metrics import structural_similarity as ssim
         
-        # 如果未指定輸出文件夾，使用默認文件夾
         if not output_folder:
-            # 使用視頻文件名作為文件夾名
             video_name = os.path.splitext(os.path.basename(video_path))[0]
             output_folder = f"video_slides_{video_name}"
         
-        # 確保輸出文件夾存在
         if not os.path.exists(output_folder):
             os.makedirs(output_folder)
             
-        # 打開視頻文件
         cap = cv2.VideoCapture(video_path)
-        
         if not cap.isOpened():
             return False, "無法打開視頻文件"
             
-        # 獲取視頻信息
         fps = cap.get(cv2.CAP_PROP_FPS)
         frame_count = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
         duration = frame_count / fps
         
-        # 計算採樣間隔（秒）
-        # 每秒檢查一次幀，可以根據需要調整
-        sample_interval = 1
+        # 獲取第一幀用於區域選擇
+        ret, first_frame = cap.read()
+        if not ret:
+            cap.release()
+            return False, "無法讀取視頻第一幀"
         
-        # 初始化幀計數器和上一幀
+        # 確保裁剪區域有效
+        frame_height, frame_width = first_frame.shape[:2]
+        if crop_region is None:
+            crop_region = (0, 0, frame_width, frame_height)
+        else:
+            # 確保裁剪區域不超出畫面範圍
+            x, y, w, h = crop_region
+            x = max(0, min(x, frame_width - 1))
+            y = max(0, min(y, frame_height - 1))
+            w = min(w, frame_width - x)
+            h = min(h, frame_height - y)
+            crop_region = (x, y, w, h)
+        
+        # 重置視頻到開始位置
+        cap.set(cv2.CAP_PROP_POS_FRAMES, 0)
+        
         frame_idx = 0
         prev_frame = None
         saved_count = 0
-        last_saved_time = -1000  # 上次保存的時間點，初始為負值
+        last_saved_time = -1000
+        stable_frames = 0
+        min_stable_frames = max(1, int(fps * 0.3))
+
+        # 記錄最後保存的幻燈片內容
+        last_saved_slide = None
+
+        # 使用傳入的取樣間隔
+        frame_step = max(1, int(fps * sample_interval))
+        
+        print(f"開始捕獲幻燈片，參數: 相似度={similarity_threshold:.2f}, "
+              f"穩定性={stability_threshold:.2f}, 間隔={sample_interval:.2f}秒")
 
         while True:
-            # 設置當前幀位置
+            # 檢查停止標誌
+            if stop_flag:
+                print("捕獲過程已被用戶停止")
+                cap.release()
+                return False, "捕獲過程已被用戶停止"
+                
             cap.set(cv2.CAP_PROP_POS_FRAMES, frame_idx)
-            
-            # 讀取當前幀
             ret, frame = cap.read()
-            
             if not ret:
                 break
                 
-            # 計算當前時間點（秒）
             current_time = frame_idx / fps
             
-            # 轉換為灰度圖像用於相似度比較
-            gray_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+            # 裁剪畫面
+            x, y, w, h = crop_region
+            cropped_frame = frame[y:y+h, x:x+w]
             
-            # 如果是第一幀或與上一幀相比相似度低於閾值，則保存
-            if prev_frame is None or (
-                current_time - last_saved_time >= 2.0 and  # 確保至少間隔2秒
-                ssim(prev_frame, gray_frame) < similarity_threshold
-            ):
-                # 保存當前幀
+            # 轉換為灰度圖像用於相似度比較
+            gray_frame = cv2.cvtColor(cropped_frame, cv2.COLOR_BGR2GRAY)
+            
+            # 畫面穩定性檢測
+            is_stable = False
+            if prev_frame is not None:
+                try:
+                    similarity = ssim(prev_frame, gray_frame)
+                    if similarity > stability_threshold:
+                        stable_frames += 1
+                    else:
+                        stable_frames = 0
+                    
+                    # 只有當畫面穩定足夠長時間才考慮保存
+                    is_stable = stable_frames >= min_stable_frames
+                except ValueError:
+                    # 處理圖像尺寸不一致的情況
+                    is_stable = False
+                    stable_frames = 0
+            else:
+                # 第一幀總是視為穩定
+                is_stable = True
+            
+            save_condition = False
+            
+            # 情況1: 第一幀總是保存
+            if prev_frame is None:
+                save_condition = True
+            
+            # 情況2: 畫面穩定且與前一幀有顯著差異
+            elif is_stable:
+                # 與前一幀比較
+                current_similarity = ssim(prev_frame, gray_frame)
+                
+                # 與最後保存的幻燈片比較
+                if last_saved_slide is not None:
+                    saved_similarity = ssim(last_saved_slide, gray_frame)
+                else:
+                    saved_similarity = current_similarity
+                
+                # 滿足任一條件即可保存：
+                save_condition = (
+                    current_similarity < similarity_threshold or
+                    saved_similarity < similarity_threshold or
+                    (current_time - last_saved_time) > 5.0
+                )
+            
+            if save_condition:
                 output_path = os.path.join(
                     output_folder, f"slide_{saved_count:03d}.png"
                 )
-                cv2.imwrite(output_path, frame)
+                cv2.imwrite(output_path, cropped_frame)
+                print(f"保存幻燈片 #{saved_count} 在 {current_time:.2f}秒")
                 saved_count += 1
                 last_saved_time = current_time
-                
-                # 更新上一幀
-                prev_frame = gray_frame
-                
-                print(f"保存幻燈片 {saved_count} 於 {current_time:.2f} 秒")
+                last_saved_slide = gray_frame.copy()  # 保存當前幻燈片內容
+                stable_frames = 0  # 重置穩定性計數器
             
-            # 更新幀索引，跳過一些幀以提高效率
-            frame_idx += int(fps * sample_interval)
-            
-            # 檢查是否已到達視頻結尾
+            prev_frame = gray_frame
+            frame_idx += frame_step  # 使用設定的取樣間隔
+                
             if frame_idx >= frame_count:
                 break
                 
-        # 釋放資源
         cap.release()
-        
+        print(f"捕獲完成，共保存 {saved_count} 張幻燈片")
         return True, {
             "output_folder": output_folder,
             "slide_count": saved_count,
             "video_duration": duration
         }
         
+    except ImportError as e:
+        if "cv2" in str(e):
+            error_msg = "未安裝 OpenCV，請執行: pip install opencv-python"
+        elif "skimage" in str(e):
+            error_msg = "未安裝 scikit-image，請執行: pip install scikit-image"
+        else:
+            error_msg = str(e)
+        return False, error_msg
     except Exception as e:
         error_msg = str(e)
         traceback.print_exc()
@@ -501,6 +588,8 @@ class VideoAudioProcessor:
         
         # 創建頁面框架
         self.setup_ui()
+        
+        self.crop_region = None  # 新增：儲存裁剪區域
     
     def setup_ui(self):
         """設置使用者介面"""
@@ -571,7 +660,9 @@ class VideoAudioProcessor:
         
         tk.Label(output_frame, text="輸出文件:").pack(side=tk.LEFT, padx=10)
         self.audio_output_entry = tk.Entry(output_frame, width=50)
-        self.audio_output_entry.pack(side=tk.LEFT, padx=5, fill=tk.X, expand=True)
+        self.audio_output_entry.pack(
+            side=tk.LEFT, padx=5, fill=tk.X, expand=True
+        )
         
         self.audio_browse_btn = tk.Button(
             output_frame, text="瀏覽...", 
@@ -712,6 +803,14 @@ class VideoAudioProcessor:
         )
         info_label.pack(pady=20)
         
+        # 在頂部添加安裝提示
+        install_label = tk.Label(
+            frame, 
+            text="注意: 此功能需要安裝 OpenCV (pip install opencv-python)",
+            font=("Arial", 10), fg="red"
+        )
+        install_label.pack(pady=5)
+        
         # 視頻文件選擇區域
         video_frame = tk.Frame(frame)
         video_frame.pack(fill=tk.X, pady=10)
@@ -743,13 +842,17 @@ class VideoAudioProcessor:
         )
         self.slide_browse_btn.pack(side=tk.LEFT, padx=5)
         
+        # === 新增：參數調整框架 ===
+        params_frame = ttk.LabelFrame(frame, text="捕獲參數調整")
+        params_frame.pack(fill=tk.X, pady=10, padx=10)
+        
         # 相似度閾值設置
-        threshold_frame = tk.Frame(frame)
-        threshold_frame.pack(fill=tk.X, pady=10)
+        threshold_frame = tk.Frame(params_frame)
+        threshold_frame.pack(fill=tk.X, pady=5)
         
         tk.Label(threshold_frame, text="相似度閾值:").pack(side=tk.LEFT, padx=10)
         
-        self.threshold_var = tk.DoubleVar(value=0.8)
+        self.threshold_var = tk.DoubleVar(value=0.7)
         self.threshold_scale = ttk.Scale(
             threshold_frame, from_=0.5, to=0.95, 
             variable=self.threshold_var, 
@@ -761,22 +864,119 @@ class VideoAudioProcessor:
         # 顯示當前閾值
         self.threshold_label = tk.Label(
             threshold_frame, 
-            textvariable=tk.StringVar(value="0.80")
+            text=f"{self.threshold_var.get():.2f}"  # 初始值顯示
         )
         self.threshold_label.pack(side=tk.LEFT, padx=5)
         
-        # 更新閾值顯示
-        def update_threshold_label(*args):
-            value = self.threshold_var.get()
-            self.threshold_label.config(text=f"{value:.2f}")
-            
-        self.threshold_var.trace_add("write", update_threshold_label)
+        # 新增說明文字
+        threshold_tip = tk.Label(
+            threshold_frame, 
+            text="值越低越靈敏，捕獲更多幻燈片（可能包含相似畫面）",
+            font=("Arial", 9), fg="#666"
+        )
+        threshold_tip.pack(side=tk.LEFT, padx=10)
+        
+        # 更新閾值顯示 (修正綁定)
+        self.threshold_var.trace_add("write", self.update_threshold_label)
+        
+        # 穩定性閾值設置
+        stability_frame = tk.Frame(params_frame)
+        stability_frame.pack(fill=tk.X, pady=5)
+        
+        tk.Label(stability_frame, text="穩定性閾值:").pack(side=tk.LEFT, padx=10)
+        
+        self.stability_var = tk.DoubleVar(value=0.95)
+        self.stability_scale = ttk.Scale(
+            stability_frame, from_=0.85, to=0.99, 
+            variable=self.stability_var, 
+            length=200,
+            orient=tk.HORIZONTAL
+        )
+        self.stability_scale.pack(side=tk.LEFT, padx=5)
+        
+        # 顯示當前穩定性閾值
+        self.stability_label = tk.Label(
+            stability_frame, 
+            text=f"{self.stability_var.get():.2f}"  # 初始值顯示
+        )
+        self.stability_label.pack(side=tk.LEFT, padx=5)
+        
+        # 更新穩定性閾值顯示 (修正綁定)
+        self.stability_var.trace_add("write", self.update_stability_label)
         
         # 說明文字
-        tk.Label(
-            threshold_frame, 
-            text="（值越低檢測越敏感，可能會捕獲較多幻燈片）"
-        ).pack(side=tk.LEFT, padx=10)
+        stability_tip = tk.Label(
+            stability_frame, 
+            text="值越高越嚴格，避免殘影（可能錯過快速變化的畫面）",
+            font=("Arial", 9), fg="#666"
+        )
+        stability_tip.pack(side=tk.LEFT, padx=10)
+        
+        # 取樣間隔設置
+        interval_frame = tk.Frame(params_frame)
+        interval_frame.pack(fill=tk.X, pady=5)
+        
+        tk.Label(interval_frame, text="取樣間隔(秒):").pack(side=tk.LEFT, padx=10)
+        
+        self.interval_var = tk.DoubleVar(value=0.5)
+        self.interval_scale = ttk.Scale(
+            interval_frame, from_=0.1, to=2.0, 
+            variable=self.interval_var, 
+            length=200,
+            orient=tk.HORIZONTAL
+        )
+        self.interval_scale.pack(side=tk.LEFT, padx=5)
+        
+        # 顯示當前取樣間隔
+        self.interval_label = tk.Label(
+            interval_frame, 
+            text=f"{self.interval_var.get():.2f}"  # 初始值顯示
+        )
+        self.interval_label.pack(side=tk.LEFT, padx=5)
+        
+        # 更新間隔顯示 (修正綁定)
+        self.interval_var.trace_add("write", self.update_interval_label)
+        
+        # 說明文字
+        interval_tip = tk.Label(
+            interval_frame, 
+            text="值越大效率越高，值越小捕獲更精確",
+            font=("Arial", 9), fg="#666"
+        )
+        interval_tip.pack(side=tk.LEFT, padx=10)
+        
+        # 參數重置按鈕
+        reset_params_btn = tk.Button(
+            params_frame, text="重置參數", 
+            command=self.reset_slide_params,
+            bg="#f0f0f0"
+        )
+        reset_params_btn.pack(pady=5)
+        
+        # === 區域選擇按鈕 ===
+        region_frame = tk.Frame(frame)
+        region_frame.pack(fill=tk.X, pady=10)
+        
+        self.select_region_btn = tk.Button(
+            region_frame, text="選擇幻燈片區域", 
+            command=self.select_slide_region,
+            state=tk.DISABLED
+        )
+        self.select_region_btn.pack(side=tk.LEFT, padx=10)
+        
+        # 區域顯示標籤
+        self.region_label = tk.Label(
+            region_frame, text="未選擇區域", fg="gray"
+        )
+        self.region_label.pack(side=tk.LEFT, padx=10)
+        
+        # 清除區域按鈕
+        self.clear_region_btn = tk.Button(
+            region_frame, text="清除區域", 
+            command=self.clear_slide_region,
+            state=tk.DISABLED
+        )
+        self.clear_region_btn.pack(side=tk.LEFT, padx=5)
         
         # 狀態顯示
         self.slide_status_var = tk.StringVar(value="準備就緒")
@@ -792,28 +992,207 @@ class VideoAudioProcessor:
         )
         self.slide_progress.pack(pady=10)
         
+        # 捕獲按鈕區域 (修改為按鈕群組)
+        button_frame = tk.Frame(frame)
+        button_frame.pack(pady=20)
+        
         # 捕獲按鈕
         self.capture_btn = tk.Button(
-            frame, text="捕獲幻燈片", command=self.capture_slides,
-            bg="#2196F3", fg="white", height=2, width=20
+            button_frame, text="捕獲幻燈片", command=self.capture_slides,
+            bg="#2196F3", fg="white", height=2, width=15
         )
-        self.capture_btn.pack(pady=20)
+        self.capture_btn.pack(side=tk.LEFT, padx=10)
         
-    def browse_slide_folder(self):
-        """瀏覽並選擇幻燈片輸出文件夾"""
-        folder_path = filedialog.askdirectory(
-            initialdir=".",
-            title="選擇保存幻燈片的文件夾"
+        # 新增：停止按鈕
+        self.stop_btn = tk.Button(
+            button_frame, text="停止捕獲", command=self.stop_capture,
+            bg="#F44336", fg="white", height=2, width=10,
+            state=tk.DISABLED
         )
-        if folder_path:
-            self.slide_output_entry.delete(0, tk.END)
-            self.slide_output_entry.insert(0, folder_path)
-    
+        self.stop_btn.pack(side=tk.LEFT, padx=10)
+        
+        # 新增：重置按鈕
+        self.reset_btn = tk.Button(
+            button_frame, text="重置參數", command=self.reset_slide_params,
+            bg="#FFC107", fg="black", height=2, width=10
+        )
+        self.reset_btn.pack(side=tk.LEFT, padx=10)
+        
+        # === 新增：預設設定框架 ===
+        preset_frame = tk.Frame(params_frame)
+        preset_frame.pack(fill=tk.X, pady=10)
+        
+        tk.Label(preset_frame, text="預設設定:").pack(side=tk.LEFT, padx=10)
+        
+        self.preset_var = tk.StringVar()
+        presets = [
+            "標準設定 (推薦)",
+            "動畫較多的簡報",
+            "靜態畫面為主的簡報",
+            "長影片優化",
+            "捕獲較少的設定 (靈敏度低)"  # 新增預設
+        ]
+        self.preset_combo = ttk.Combobox(
+            preset_frame, textvariable=self.preset_var,
+            values=presets, state="readonly", width=25
+        )
+        self.preset_combo.pack(side=tk.LEFT, padx=5)
+        self.preset_combo.bind("<<ComboboxSelected>>", self.apply_preset)
+        
+        # 添加說明標籤
+        self.preset_tip = tk.Label(
+            preset_frame, 
+            text="選擇預設設定後將自動調整參數",
+            font=("Arial", 9), fg="#666"
+        )
+        self.preset_tip.pack(side=tk.LEFT, padx=10)
+        
+    def reset_slide_params(self):
+        """重置捕獲參數為默認值"""
+        self.threshold_var.set(0.7)
+        self.stability_var.set(0.95)
+        self.interval_var.set(0.5)
+        messagebox.showinfo("參數重置", "捕獲參數已重置為默認值")
+        
+    def check_video_selected(self, event=None):
+        """檢查是否已選擇視頻文件"""
+        video_path = self.slide_video_entry.get()
+        if video_path and os.path.isfile(video_path):
+            try:
+                # 新增：檢查 OpenCV 是否安裝
+                import cv2
+                self.select_region_btn.config(state=tk.NORMAL)
+            except ImportError:
+                # 如果未安裝，禁用區域選擇按鈕並顯示提示
+                self.select_region_btn.config(state=tk.DISABLED)
+                self.region_label.config(
+                    text="請先安裝 OpenCV (pip install opencv-python)", 
+                    fg="red"
+                )
+        else:
+            self.select_region_btn.config(state=tk.DISABLED)
+            self.clear_region_btn.config(state=tk.DISABLED)
+            self.region_label.config(text="未選擇區域", fg="gray")
+            self.crop_region = None
+            
+    def select_slide_region(self):
+        """讓使用者選擇裁剪區域（新增時間點選擇功能）"""
+        video_path = self.slide_video_entry.get()
+        if not video_path:
+            return
+            
+        try:
+            import cv2
+            
+            # 彈出對話框讓使用者輸入時間點（秒）
+            time_str = simpledialog.askfloat(
+                "選擇時間點",
+                "請輸入影片時間點（秒）來選取區域:",
+                parent=self.root,
+                minvalue=0
+            )
+            
+            if time_str is None:  # 使用者取消
+                return
+                
+            # 讀取指定時間點的幀
+            cap = cv2.VideoCapture(video_path)
+            
+            # 設置到指定時間（毫秒）
+            cap.set(cv2.CAP_PROP_POS_MSEC, time_str * 1000)
+            
+            ret, frame = cap.read()
+            cap.release()
+            
+            if not ret:
+                messagebox.showerror("錯誤", f"無法讀取影片在 {time_str} 秒的畫面")
+                return
+                
+            # 轉換為 RGB 格式
+            frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+            
+            # 創建區域選擇窗口
+            region_selector = tk.Toplevel(self.root)
+            region_selector.title(f"選擇幻燈片區域 (時間點: {time_str}秒)")
+            region_selector.geometry(f"{frame.shape[1]}x{frame.shape[0]}")
+            
+            # 顯示圖像
+            img = Image.fromarray(frame_rgb)
+            photo = ImageTk.PhotoImage(img)
+            
+            canvas = tk.Canvas(region_selector, width=frame.shape[1], height=frame.shape[0])
+            canvas.pack()
+            canvas.create_image(0, 0, anchor=tk.NW, image=photo)
+            canvas.image = photo  # 保持引用
+            
+            # 區域選擇變量
+            start_x, start_y = None, None
+            rect_id = None
+            selected_region = None
+            
+            def on_press(event):
+                nonlocal start_x, start_y, rect_id
+                start_x, start_y = event.x, event.y
+                rect_id = canvas.create_rectangle(
+                    start_x, start_y, start_x, start_y, outline="red", width=2
+                )
+            
+            def on_drag(event):
+                nonlocal start_x, start_y, rect_id
+                if rect_id:
+                    canvas.coords(rect_id, start_x, start_y, event.x, event.y)
+            
+            def on_release(event):
+                nonlocal selected_region
+                x1, y1 = start_x, start_y
+                x2, y2 = event.x, event.y
+                
+                # 確保左上角和右下角
+                x = min(x1, x2)
+                y = min(y1, y2)
+                width = abs(x2 - x1)
+                height = abs(y2 - y1)
+                
+                selected_region = (x, y, width, height)
+                self.crop_region = selected_region
+                self.region_label.config(
+                    text=f"區域: ({x}, {y}, {width}, {height})",
+                    fg="green"
+                )
+                self.clear_region_btn.config(state=tk.NORMAL)
+                region_selector.destroy()
+            
+            # 綁定事件
+            canvas.bind("<ButtonPress-1>", on_press)
+            canvas.bind("<B1-Motion>", on_drag)
+            canvas.bind("<ButtonRelease-1>", on_release)
+            
+            # 添加說明文字
+            canvas.create_text(
+                frame.shape[1] // 2, 20,
+                text="拖拽滑鼠選擇幻燈片區域",
+                fill="yellow",
+                font=("Arial", 16, "bold")
+            )
+            
+        except ImportError:
+            messagebox.showerror("錯誤", "請先安裝OpenCV: pip install opencv-python")
+        except Exception as e:
+            messagebox.showerror("錯誤", f"區域選擇失敗: {str(e)}")
+            
+    def clear_slide_region(self):
+        """清除已選擇的區域"""
+        self.crop_region = None
+        self.region_label.config(text="未選擇區域", fg="gray")
+        self.clear_region_btn.config(state=tk.DISABLED)
+            
     def capture_slides(self):
         """捕獲幻燈片按鈕點擊處理"""
         video_path = self.slide_video_entry.get()
         output_folder = self.slide_output_entry.get()
         threshold = self.threshold_var.get()
+        stability = self.stability_var.get()
+        interval = self.interval_var.get()
         
         if not video_path:
             messagebox.showwarning("警告", "請選擇視頻文件")
@@ -827,25 +1206,43 @@ class VideoAudioProcessor:
             self.slide_output_entry.delete(0, tk.END)
             self.slide_output_entry.insert(0, output_folder)
         
+        # 顯示使用的參數
+        self.slide_status_var.set(
+            f"開始捕獲: 相似度={threshold:.2f}, 穩定性={stability:.2f}, 間隔={interval:.2f}秒"
+        )
+        
         # 開始捕獲（在背景線程中運行）
-        self.slide_status_var.set("正在捕獲幻燈片...")
         self.slide_progress.start(10)
         self.capture_btn.config(state=tk.DISABLED)
+        self.stop_btn.config(state=tk.NORMAL)
+        
+        # 設置停止標誌
+        self.stop_capture_flag = False
         
         def capture_thread():
+            # 調用捕獲函數，傳遞所有參數
             success, result = capture_slides_from_video(
-                video_path, output_folder, threshold
+                video_path, 
+                output_folder, 
+                similarity_threshold=threshold,
+                crop_region=self.crop_region,
+                stability_threshold=stability,
+                sample_interval=interval,
+                stop_flag=self.stop_capture_flag  # 傳遞停止標誌
             )
             
             # 在主線程中更新 UI
             self.root.after(0, lambda: self.capture_completed(success, result))
         
-        threading.Thread(target=capture_thread).start()
+        self.capture_thread = threading.Thread(target=capture_thread)
+        self.capture_thread.daemon = True
+        self.capture_thread.start()
     
     def capture_completed(self, success, result):
         """幻燈片捕獲完成後的處理"""
         self.slide_progress.stop()
         self.capture_btn.config(state=tk.NORMAL)
+        self.stop_btn.config(state=tk.DISABLED)
         
         if success:
             output_folder = result.get("output_folder", "未知文件夾")
@@ -1401,6 +1798,72 @@ class VideoAudioProcessor:
             self.slide_make_status_var.set(f"PowerPoint 生成失敗: {result}")
             messagebox.showerror("錯誤", f"PowerPoint 生成失敗: {result}")
 
+    def browse_slide_folder(self):
+        """瀏覽並選擇幻燈片輸出文件夾"""
+        folder_path = filedialog.askdirectory(
+            initialdir=".",
+            title="選擇保存幻燈片的文件夾"
+        )
+        if folder_path:
+            self.slide_output_entry.delete(0, tk.END)
+            self.slide_output_entry.insert(0, folder_path)
+
+    # 新增更新函數 (確保綁定正確)
+    def update_threshold_label(self, *args):
+        value = self.threshold_var.get()
+        self.threshold_label.config(text=f"{value:.2f}")
+    
+    def update_stability_label(self, *args):
+        value = self.stability_var.get()
+        self.stability_label.config(text=f"{value:.2f}")
+    
+    def update_interval_label(self, *args):
+        value = self.interval_var.get()
+        self.interval_label.config(text=f"{value:.2f}")
+
+    # 新增預設設定應用函數
+    def apply_preset(self, event):
+        """套用預設設定"""
+        preset = self.preset_var.get()
+        
+        if preset == "標準設定 (推薦)":
+            self.threshold_var.set(0.7)
+            self.stability_var.set(0.95)
+            self.interval_var.set(0.5)
+            self.preset_tip.config(text="適合大多數影片")
+            
+        elif preset == "動畫較多的簡報":
+            self.threshold_var.set(0.65)
+            self.stability_var.set(0.97)
+            self.interval_var.set(0.3)
+            self.preset_tip.config(text="適用於有過場動畫的簡報")
+            
+        elif preset == "靜態畫面為主的簡報":
+            self.threshold_var.set(0.8)
+            self.stability_var.set(0.92)
+            self.interval_var.set(1.0)
+            self.preset_tip.config(text="適用於畫面變化少的簡報")
+            
+        elif preset == "長影片優化":
+            self.threshold_var.set(0.75)
+            self.stability_var.set(0.95)
+            self.interval_var.set(1.5)
+            self.preset_tip.config(text="適用於長時間影片處理")
+            
+        elif preset == "捕獲較少的設定 (靈敏度低)":  # 新增設定
+            self.threshold_var.set(0.85)  # 更高的相似度閾值
+            self.stability_var.set(0.98)  # 更高的穩定性要求
+            self.interval_var.set(1.0)    # 更長的取樣間隔
+            self.preset_tip.config(text="減少捕獲數量，提高品質")
+
+    # 新增停止捕獲功能
+    def stop_capture(self):
+        """停止捕獲過程"""
+        if hasattr(self, 'capture_thread') and self.capture_thread.is_alive():
+            self.stop_capture_flag = True
+            self.stop_btn.config(state=tk.DISABLED)
+            self.slide_status_var.set("停止請求已發送...")
+
 
 def main():
     """主函數"""
@@ -1409,16 +1872,38 @@ def main():
     
     if missing_packages:
         print(f"缺少以下依賴: {', '.join(missing_packages)}")
+        
+        # 特別提示 OpenCV
+        if "opencv-python" in missing_packages:
+            print("注意: OpenCV 是幻燈片捕獲功能的必要依賴")
+            print("請確保安裝正確版本: pip install opencv-python")
+        
         choice = input("是否自動安裝這些依賴？(y/n): ")
         
         if choice.lower() == 'y':
             if not install_dependencies(missing_packages):
                 print("依賴安裝失敗，請手動執行：")
                 print(f"pip install {' '.join(missing_packages)}")
+                
+                # 特別提示 OpenCV 安裝問題
+                if "opencv-python" in missing_packages:
+                    print("\n如果 OpenCV 安裝失敗，請嘗試:")
+                    print("1. 確保 Python 版本為 3.6+")
+                    print("2. 嘗試: pip install opencv-python-headless")
+                    print("3. 或從官方網站下載預編譯版本: https://opencv.org/releases/")
+                
                 sys.exit(1)
         else:
             print("請手動安裝以下依賴後再運行:")
             print(f"pip install {' '.join(missing_packages)}")
+            
+            # 特別提示 OpenCV
+            if "opencv-python" in missing_packages:
+                print("\nOpenCV 安裝指令:")
+                print("pip install opencv-python")
+                print("# 如果遇到問題，嘗試:")
+                print("pip install opencv-python-headless")
+            
             sys.exit(1)
     
     try:
