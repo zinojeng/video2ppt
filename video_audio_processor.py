@@ -19,6 +19,7 @@ import threading
 from PIL import Image, ImageTk
 import importlib
 import time
+import numpy as np
 
 # 需要時會動態導入的模塊:
 # - moviepy (extract_audio_from_video)
@@ -185,6 +186,7 @@ def capture_slides_from_video(video_path, output_folder=None,
     """
     try:
         import cv2
+        import numpy as np
         from skimage.metrics import structural_similarity as ssim
         
         if not output_folder:
@@ -229,10 +231,16 @@ def capture_slides_from_video(video_path, output_folder=None,
         saved_count = 0
         last_saved_time = -1000
         stable_frames = 0
-        min_stable_frames = max(1, int(fps * 0.3))
+        min_stable_frames = max(1, int(fps * 0.5))  # 增加到 0.5 秒
 
         # 記錄最後保存的幻燈片內容
         last_saved_slide = None
+        
+        # 新增：記錄所有已保存的投影片，用於全局比較
+        saved_slides = []
+        
+        # 新增：最小時間間隔（秒）
+        min_time_between_slides = 2.0  # 至少間隔 2 秒
 
         # 使用傳入的取樣間隔
         frame_step = max(1, int(fps * sample_interval))
@@ -287,33 +295,95 @@ def capture_slides_from_video(video_path, output_folder=None,
             if prev_frame is None:
                 save_condition = True
             
-            # 情況2: 畫面穩定且與前一幀有顯著差異
+            # 情況2: 畫面穩定且滿足條件
             elif is_stable:
-                # 與前一幀比較
-                current_similarity = ssim(prev_frame, gray_frame)
-                
-                # 與最後保存的幻燈片比較
-                if last_saved_slide is not None:
-                    saved_similarity = ssim(last_saved_slide, gray_frame)
+                # 檢查時間間隔
+                time_since_last_save = current_time - last_saved_time
+                if time_since_last_save < min_time_between_slides:
+                    save_condition = False
                 else:
-                    saved_similarity = current_similarity
-                
-                # 滿足任一條件即可保存：
-                save_condition = (
-                    current_similarity < similarity_threshold or
-                    saved_similarity < similarity_threshold or
-                    (current_time - last_saved_time) > 5.0
-                )
+                    # 與前一幀比較
+                    current_similarity = ssim(prev_frame, gray_frame)
+                    
+                    # 與最後保存的幻燈片比較
+                    if last_saved_slide is not None:
+                        saved_similarity = ssim(last_saved_slide, gray_frame)
+                    else:
+                        saved_similarity = 0
+                    
+                    # 新增：檢測內容增加（處理分段顯示的投影片）
+                    content_increased = False
+                    if last_saved_slide is not None:
+                        # 計算非零像素的比例來判斷內容是否增加
+                        current_content = np.count_nonzero(gray_frame > 20)
+                        last_content = np.count_nonzero(last_saved_slide > 20)
+                        content_ratio = current_content / (last_content + 1)
+                        
+                        # 如果內容增加超過 20%，視為新內容
+                        if content_ratio > 1.2:
+                            content_increased = True
+                            print(f"檢測到內容增加: {content_ratio:.2f}倍")
+                    
+                    # 新增：與所有已保存的投影片比較
+                    is_duplicate = False
+                    should_replace = -1  # 記錄應該替換的投影片索引
+                    
+                    for i, saved_slide in enumerate(saved_slides):
+                        try:
+                            global_similarity = ssim(saved_slide, gray_frame)
+                            
+                            # 如果非常相似但內容增加，應該替換舊的
+                            if global_similarity > 0.85 and content_increased:
+                                # 檢查當前幀是否包含更多內容
+                                saved_content = np.count_nonzero(saved_slide > 20)
+                                current_content = np.count_nonzero(gray_frame > 20)
+                                if current_content > saved_content * 1.2:
+                                    should_replace = i
+                                    print(f"將替換投影片 #{i}（內容更完整）")
+                                    break
+                            
+                            # 完全相同的投影片
+                            elif global_similarity > 0.95:
+                                is_duplicate = True
+                                break
+                        except Exception:
+                            continue
+                    
+                    # 滿足條件才保存：
+                    # 1. 不是重複的投影片
+                    # 2. 與前一幀有顯著差異 或 與最後保存的有顯著差異
+                    # 3. 時間間隔足夠長
+                    # 4. 或者是內容增加的情況
+                    if not is_duplicate:
+                        save_condition = (
+                            current_similarity < similarity_threshold or
+                            saved_similarity < similarity_threshold or
+                            content_increased or
+                            should_replace >= 0
+                        )
             
             if save_condition:
-                output_path = os.path.join(
-                    output_folder, f"slide_{saved_count:03d}.png"
-                )
+                # 如果是替換情況，使用相同的檔名
+                if 'should_replace' in locals() and should_replace >= 0:
+                    output_path = os.path.join(
+                        output_folder, f"slide_{should_replace:03d}.png"
+                    )
+                    saved_slides[should_replace] = gray_frame.copy()
+                    print(f"替換投影片 #{should_replace} 在 {current_time:.2f}秒")
+                else:
+                    output_path = os.path.join(
+                        output_folder, f"slide_{saved_count:03d}.png"
+                    )
+                    saved_count += 1
+                    # 保存到全局列表（限制數量以節省記憶體）
+                    if len(saved_slides) > 50:
+                        saved_slides.pop(0)
+                    saved_slides.append(gray_frame.copy())
+                    print(f"保存幻燈片 #{saved_count-1} 在 {current_time:.2f}秒")
+                
                 cv2.imwrite(output_path, cropped_frame)
-                print(f"保存幻燈片 #{saved_count} 在 {current_time:.2f}秒")
-                saved_count += 1
                 last_saved_time = current_time
-                last_saved_slide = gray_frame.copy()  # 保存當前幻燈片內容
+                last_saved_slide = gray_frame.copy()
                 stable_frames = 0  # 重置穩定性計數器
             
             prev_frame = gray_frame
@@ -852,7 +922,7 @@ class VideoAudioProcessor:
         
         tk.Label(threshold_frame, text="相似度閾值:").pack(side=tk.LEFT, padx=10)
         
-        self.threshold_var = tk.DoubleVar(value=0.7)
+        self.threshold_var = tk.DoubleVar(value=0.85)  # 提高預設值
         self.threshold_scale = ttk.Scale(
             threshold_frame, from_=0.5, to=0.95, 
             variable=self.threshold_var, 
@@ -885,7 +955,7 @@ class VideoAudioProcessor:
         
         tk.Label(stability_frame, text="穩定性閾值:").pack(side=tk.LEFT, padx=10)
         
-        self.stability_var = tk.DoubleVar(value=0.95)
+        self.stability_var = tk.DoubleVar(value=0.96)  # 提高預設值
         self.stability_scale = ttk.Scale(
             stability_frame, from_=0.85, to=0.99, 
             variable=self.stability_var, 
@@ -918,9 +988,9 @@ class VideoAudioProcessor:
         
         tk.Label(interval_frame, text="取樣間隔(秒):").pack(side=tk.LEFT, padx=10)
         
-        self.interval_var = tk.DoubleVar(value=0.5)
+        self.interval_var = tk.DoubleVar(value=1.0)  # 增加預設值
         self.interval_scale = ttk.Scale(
-            interval_frame, from_=0.1, to=2.0, 
+            interval_frame, from_=0.1, to=3.0,  # 擴大範圍到 3.0
             variable=self.interval_var, 
             length=200,
             orient=tk.HORIZONTAL
@@ -1049,9 +1119,9 @@ class VideoAudioProcessor:
         
     def reset_slide_params(self):
         """重置捕獲參數為默認值"""
-        self.threshold_var.set(0.7)
-        self.stability_var.set(0.95)
-        self.interval_var.set(0.5)
+        self.threshold_var.set(0.85)  # 提高預設值
+        self.stability_var.set(0.96)  # 提高預設值
+        self.interval_var.set(1.0)    # 增加預設值
         messagebox.showinfo("參數重置", "捕獲參數已重置為默認值")
         
     def check_video_selected(self, event=None):
@@ -1827,34 +1897,34 @@ class VideoAudioProcessor:
         preset = self.preset_var.get()
         
         if preset == "標準設定 (推薦)":
-            self.threshold_var.set(0.7)
-            self.stability_var.set(0.95)
-            self.interval_var.set(0.5)
-            self.preset_tip.config(text="適合大多數影片")
+            self.threshold_var.set(0.85)  # 提高到 0.85
+            self.stability_var.set(0.96)  # 提高到 0.96
+            self.interval_var.set(1.0)    # 增加到 1.0 秒
+            self.preset_tip.config(text="適合大多數影片，減少重複捕獲")
             
         elif preset == "動畫較多的簡報":
-            self.threshold_var.set(0.65)
-            self.stability_var.set(0.97)
-            self.interval_var.set(0.3)
+            self.threshold_var.set(0.75)  # 提高到 0.75
+            self.stability_var.set(0.98)  # 提高到 0.98
+            self.interval_var.set(0.5)    # 保持 0.5 秒
             self.preset_tip.config(text="適用於有過場動畫的簡報")
             
         elif preset == "靜態畫面為主的簡報":
-            self.threshold_var.set(0.8)
-            self.stability_var.set(0.92)
-            self.interval_var.set(1.0)
+            self.threshold_var.set(0.90)  # 提高到 0.90
+            self.stability_var.set(0.94)  # 稍微提高
+            self.interval_var.set(2.0)    # 增加到 2.0 秒
             self.preset_tip.config(text="適用於畫面變化少的簡報")
             
         elif preset == "長影片優化":
-            self.threshold_var.set(0.75)
-            self.stability_var.set(0.95)
-            self.interval_var.set(1.5)
+            self.threshold_var.set(0.88)  # 提高到 0.88
+            self.stability_var.set(0.96)  # 保持 0.96
+            self.interval_var.set(2.5)    # 增加到 2.5 秒
             self.preset_tip.config(text="適用於長時間影片處理")
             
-        elif preset == "捕獲較少的設定 (靈敏度低)":  # 新增設定
-            self.threshold_var.set(0.85)  # 更高的相似度閾值
-            self.stability_var.set(0.98)  # 更高的穩定性要求
-            self.interval_var.set(1.0)    # 更長的取樣間隔
-            self.preset_tip.config(text="減少捕獲數量，提高品質")
+        elif preset == "捕獲較少的設定 (靈敏度低)":
+            self.threshold_var.set(0.92)  # 更高的相似度閾值
+            self.stability_var.set(0.98)  # 保持高穩定性要求
+            self.interval_var.set(2.0)    # 更長的取樣間隔
+            self.preset_tip.config(text="大幅減少捕獲數量，只保留明顯不同的投影片")
 
     # 新增停止捕獲功能
     def stop_capture(self):

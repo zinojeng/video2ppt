@@ -1,12 +1,28 @@
+# 視頻音頻處理工具依賴套件
+# Video Audio Processor Requirements
+
+# 核心依賴套件 (必要)
+opencv-python>=4.8.0
+numpy>=1.24.0
+Pillow>=10.0.0
 moviepy>=1.0.3
-opencv-python>=4.5.0
-numpy>=1.19.0
-pillow>=9.0.0
-python-pptx>=0.6.20
-scikit-image>=0.19.0
+python-pptx>=0.6.21
+scikit-image>=0.21.0
+
+# 可選套件 (進階功能)
+# MarkItDown - 用於增強 Markdown 生成
+markitdown>=0.1.1
+
+# 網頁捕獲相關 (可選)
+# selenium>=4.0.0
+# pyautogui>=0.9.54
+# webdriver-manager>=4.0.0
+
+# 如果需要 Gemini API 支援
+# google-generativeai>=0.3.0
+
+# 如果需要 OpenAI API 支援
+# openai>=1.0.0
 
 # 可選依賴
-markitdown>=0.1.1  # 增強型Markdown生成功能
-openai>=1.0.0      # AI輔助功能 
-google-genai>=0.4.0 # Google Gemini API 功能 
 pywin32>=306       # Windows 系統使用 Word 風格增強功能 

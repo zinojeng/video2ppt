@@ -196,7 +196,7 @@ def convert_images_to_markdown(
             
             # 修正日誌訊息，反映實際情況
             if successful_conversions > 0:
-                logger.info(f"已將 {successful_conversions} 張圖片轉換並寫入 {output_file}")
+            logger.info(f"已將 {successful_conversions} 張圖片轉換並寫入 {output_file}")
             else:
                 logger.info(f"已創建包含 {len(valid_images)} 張圖片標記的 Markdown 檔案: {output_file}")
             
