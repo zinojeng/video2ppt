@@ -50,19 +50,19 @@ def check_dependencies():
         try:
             # 處理特殊套件名稱
             import_name = package.replace("-", "_")
-            # 處理 opencv-python 特例
+            # 處理 opencv-python 特例 (支援 opencv-python 或 opencv-python-headless)
             if package == "opencv-python":
                 import_name = "cv2"
-                # 新增：檢查 OpenCV 是否能正確導入
-                spec = importlib.util.find_spec(import_name)
-                if spec is None:
-                    missing_packages.append(package)
-                else:
-                    # 實際導入測試
+                try:
+                    # 嘗試導入 cv2 並測試基本功能
                     import cv2
-                    # 測試基本功能
                     if not hasattr(cv2, 'VideoCapture'):
                         missing_packages.append(package)
+                    # 如果成功導入，跳過後續檢查
+                    continue
+                except ImportError:
+                    missing_packages.append(package)
+                    continue
             # 處理 python-pptx 特例
             elif package == "python-pptx":
                 import_name = "pptx"
@@ -110,7 +110,7 @@ def check_dependencies():
         print("如果您想使用網頁捕獲功能，請安裝:")
         print(f"pip install {' '.join(missing_web)}")
     
-    return missing_packages + missing_web
+    return missing_packages
 
 
 def install_dependencies(packages):
@@ -171,7 +171,7 @@ def extract_audio_from_video(video_path, output_path=None, format="mp3"):
 def capture_slides_from_video(video_path, output_folder=None, 
                              similarity_threshold=0.7, crop_region=None, 
                              stability_threshold=0.95, sample_interval=0.5,
-                             stop_flag=False):
+                             playback_speed=1.0, stop_flag=False):
     """
     從視頻文件中捕獲幻燈片
     
@@ -182,6 +182,7 @@ def capture_slides_from_video(video_path, output_folder=None,
         crop_region: 裁剪區域 (x, y, width, height) 或 None
         stability_threshold: 畫面穩定性閾值
         sample_interval: 取樣間隔（秒）
+        playback_speed: 播放速度倍數 (1.0=正常速度, 2.0=2倍速, 0.5=0.5倍速)
         stop_flag: 停止捕獲標誌
     """
     try:
@@ -239,14 +240,16 @@ def capture_slides_from_video(video_path, output_folder=None,
         # 新增：記錄所有已保存的投影片，用於全局比較
         saved_slides = []
         
-        # 新增：最小時間間隔（秒）
-        min_time_between_slides = 2.0  # 至少間隔 2 秒
+        # 新增：最小時間間隔（秒），根據播放速度調整
+        min_time_between_slides = 2.0 / playback_speed  # 播放速度越快，時間間隔相對越短
 
-        # 使用傳入的取樣間隔
-        frame_step = max(1, int(fps * sample_interval))
+        # 使用傳入的取樣間隔，結合播放速度
+        effective_interval = sample_interval / playback_speed
+        frame_step = max(1, int(fps * sample_interval * playback_speed))
         
         print(f"開始捕獲幻燈片，參數: 相似度={similarity_threshold:.2f}, "
-              f"穩定性={stability_threshold:.2f}, 間隔={sample_interval:.2f}秒")
+              f"穩定性={stability_threshold:.2f}, 間隔={sample_interval:.2f}秒, "
+              f"播放速度={playback_speed:.1f}x")
 
         while True:
             # 檢查停止標誌
@@ -1015,6 +1018,39 @@ class VideoAudioProcessor:
         )
         interval_tip.pack(side=tk.LEFT, padx=10)
         
+        # 播放速度設置
+        speed_frame = tk.Frame(params_frame)
+        speed_frame.pack(fill=tk.X, pady=5)
+        
+        tk.Label(speed_frame, text="播放速度:").pack(side=tk.LEFT, padx=10)
+        
+        self.speed_var = tk.DoubleVar(value=1.0)
+        self.speed_scale = ttk.Scale(
+            speed_frame, from_=0.5, to=4.0,
+            variable=self.speed_var, 
+            length=200,
+            orient=tk.HORIZONTAL
+        )
+        self.speed_scale.pack(side=tk.LEFT, padx=5)
+        
+        # 顯示當前播放速度
+        self.speed_label = tk.Label(
+            speed_frame, 
+            text=f"{self.speed_var.get():.1f}x"
+        )
+        self.speed_label.pack(side=tk.LEFT, padx=5)
+        
+        # 更新速度顯示
+        self.speed_var.trace_add("write", self.update_speed_label)
+        
+        # 說明文字
+        speed_tip = tk.Label(
+            speed_frame, 
+            text="值越大截取速度越快（2x = 2倍速，4x = 4倍速）",
+            font=("Arial", 9), fg="#666"
+        )
+        speed_tip.pack(side=tk.LEFT, padx=10)
+        
         # 參數重置按鈕
         reset_params_btn = tk.Button(
             params_frame, text="重置參數", 
@@ -1100,7 +1136,8 @@ class VideoAudioProcessor:
             "動畫較多的簡報",
             "靜態畫面為主的簡報",
             "長影片優化",
-            "捕獲較少的設定 (靈敏度低)"  # 新增預設
+            "捕獲較少的設定 (靈敏度低)",
+            "快速模式 (4倍速)"  # 新增快速模式
         ]
         self.preset_combo = ttk.Combobox(
             preset_frame, textvariable=self.preset_var,
@@ -1122,6 +1159,7 @@ class VideoAudioProcessor:
         self.threshold_var.set(0.85)  # 提高預設值
         self.stability_var.set(0.96)  # 提高預設值
         self.interval_var.set(1.0)    # 增加預設值
+        self.speed_var.set(1.0)       # 重置播放速度
         messagebox.showinfo("參數重置", "捕獲參數已重置為默認值")
         
     def check_video_selected(self, event=None):
@@ -1263,6 +1301,7 @@ class VideoAudioProcessor:
         threshold = self.threshold_var.get()
         stability = self.stability_var.get()
         interval = self.interval_var.get()
+        speed = self.speed_var.get()
         
         if not video_path:
             messagebox.showwarning("警告", "請選擇視頻文件")
@@ -1278,7 +1317,7 @@ class VideoAudioProcessor:
         
         # 顯示使用的參數
         self.slide_status_var.set(
-            f"開始捕獲: 相似度={threshold:.2f}, 穩定性={stability:.2f}, 間隔={interval:.2f}秒"
+            f"開始捕獲: 相似度={threshold:.2f}, 穩定性={stability:.2f}, 間隔={interval:.2f}秒, 速度={speed:.1f}x"
         )
         
         # 開始捕獲（在背景線程中運行）
@@ -1298,6 +1337,7 @@ class VideoAudioProcessor:
                 crop_region=self.crop_region,
                 stability_threshold=stability,
                 sample_interval=interval,
+                playback_speed=speed,
                 stop_flag=self.stop_capture_flag  # 傳遞停止標誌
             )
             
@@ -1890,6 +1930,10 @@ class VideoAudioProcessor:
     def update_interval_label(self, *args):
         value = self.interval_var.get()
         self.interval_label.config(text=f"{value:.2f}")
+    
+    def update_speed_label(self, *args):
+        value = self.speed_var.get()
+        self.speed_label.config(text=f"{value:.1f}x")
 
     # 新增預設設定應用函數
     def apply_preset(self, event):
@@ -1900,31 +1944,43 @@ class VideoAudioProcessor:
             self.threshold_var.set(0.85)  # 提高到 0.85
             self.stability_var.set(0.96)  # 提高到 0.96
             self.interval_var.set(1.0)    # 增加到 1.0 秒
-            self.preset_tip.config(text="適合大多數影片，減少重複捕獲")
+            self.speed_var.set(1.5)       # 1.5倍速
+            self.preset_tip.config(text="適合大多數影片，減少重複捕獲，中等加速")
             
         elif preset == "動畫較多的簡報":
             self.threshold_var.set(0.75)  # 提高到 0.75
             self.stability_var.set(0.98)  # 提高到 0.98
             self.interval_var.set(0.5)    # 保持 0.5 秒
-            self.preset_tip.config(text="適用於有過場動畫的簡報")
+            self.speed_var.set(1.0)       # 正常速度，動畫需要仔細捕獲
+            self.preset_tip.config(text="適用於有過場動畫的簡報，正常速度")
             
         elif preset == "靜態畫面為主的簡報":
             self.threshold_var.set(0.90)  # 提高到 0.90
             self.stability_var.set(0.94)  # 稍微提高
             self.interval_var.set(2.0)    # 增加到 2.0 秒
-            self.preset_tip.config(text="適用於畫面變化少的簡報")
+            self.speed_var.set(2.0)       # 2倍速，靜態畫面可以快速處理
+            self.preset_tip.config(text="適用於畫面變化少的簡報，2倍速加快處理")
             
         elif preset == "長影片優化":
             self.threshold_var.set(0.88)  # 提高到 0.88
             self.stability_var.set(0.96)  # 保持 0.96
             self.interval_var.set(2.5)    # 增加到 2.5 秒
-            self.preset_tip.config(text="適用於長時間影片處理")
+            self.speed_var.set(3.0)       # 3倍速，長影片需要更快處理
+            self.preset_tip.config(text="適用於長時間影片處理，3倍速大幅加快")
             
         elif preset == "捕獲較少的設定 (靈敏度低)":
             self.threshold_var.set(0.92)  # 更高的相似度閾值
             self.stability_var.set(0.98)  # 保持高穩定性要求
             self.interval_var.set(2.0)    # 更長的取樣間隔
-            self.preset_tip.config(text="大幅減少捕獲數量，只保留明顯不同的投影片")
+            self.speed_var.set(2.5)       # 2.5倍速
+            self.preset_tip.config(text="大幅減少捕獲數量，只保留明顯不同的投影片，2.5倍速")
+            
+        elif preset == "快速模式 (4倍速)":
+            self.threshold_var.set(0.88)  # 適中的相似度閾值
+            self.stability_var.set(0.95)  # 稍微降低穩定性要求
+            self.interval_var.set(1.5)    # 1.5秒間隔
+            self.speed_var.set(4.0)       # 4倍速，最快模式
+            self.preset_tip.config(text="最快速模式，4倍速處理，適合快速預覽")
 
     # 新增停止捕獲功能
     def stop_capture(self):
@@ -1952,26 +2008,37 @@ def main():
         
         if choice.lower() == 'y':
             if not install_dependencies(missing_packages):
-                print("依賴安裝失敗，請手動執行：")
-                print(f"pip install {' '.join(missing_packages)}")
+                print("依賴安裝失敗！")
+                print("\n🔧 解決方案:")
+                print("1. 推薦使用 start.sh 腳本（自動處理虛擬環境）:")
+                print("   chmod +x start.sh")
+                print("   ./start.sh")
+                print("\n2. 或手動創建虛擬環境:")
+                print("   python3 -m venv venv")
+                print("   source venv/bin/activate")
+                print(f"   pip install {' '.join(missing_packages)}")
                 
                 # 特別提示 OpenCV 安裝問題
                 if "opencv-python" in missing_packages:
-                    print("\n如果 OpenCV 安裝失敗，請嘗試:")
-                    print("1. 確保 Python 版本為 3.6+")
-                    print("2. 嘗試: pip install opencv-python-headless")
-                    print("3. 或從官方網站下載預編譯版本: https://opencv.org/releases/")
+                    print("\n💡 OpenCV 安裝提示:")
+                    print("如果 opencv-python 安裝失敗，可嘗試:")
+                    print("pip install opencv-python-headless")
                 
                 sys.exit(1)
         else:
-            print("請手動安裝以下依賴後再運行:")
-            print(f"pip install {' '.join(missing_packages)}")
+            print("\n🔧 手動安裝步驟:")
+            print("1. 推薦使用 start.sh 腳本:")
+            print("   chmod +x start.sh")
+            print("   ./start.sh")
+            print("\n2. 或手動創建虛擬環境安裝:")
+            print("   python3 -m venv venv")
+            print("   source venv/bin/activate")
+            print(f"   pip install {' '.join(missing_packages)}")
             
             # 特別提示 OpenCV
             if "opencv-python" in missing_packages:
-                print("\nOpenCV 安裝指令:")
-                print("pip install opencv-python")
-                print("# 如果遇到問題，嘗試:")
+                print("\n💡 OpenCV 安裝提示:")
+                print("如果 opencv-python 安裝失敗，可嘗試:")
                 print("pip install opencv-python-headless")
             
             sys.exit(1)

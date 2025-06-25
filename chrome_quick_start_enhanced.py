@@ -129,6 +129,10 @@ def process_captured_slides(
                 slides_folder,  # 改為直接在投影片資料夾內
                 "slides_analysis.md"
             )
+            
+            # 對於純圖片檔案，MarkItDown 無法處理，但我們仍然可以使用 LLM 分析
+            # 這裡的 convert_images_to_markdown 會創建基本的 Markdown 結構，
+            # 然後使用 image_analyzer 來增強內容
             success, md_file, info = convert_images_to_markdown(
                 image_paths=image_files,
                 output_file=output_md,
@@ -141,7 +145,21 @@ def process_captured_slides(
             )
             
             if success:
-                messagebox.showinfo("成功", f"已生成 Markdown 檔案: {md_file}")
+                # 檢查是否有實際的分析內容
+                analyzed_count = info.get('llm', {}).get('images_analyzed', 0)
+                if analyzed_count > 0:
+                    messagebox.showinfo(
+                        "成功", 
+                        f"已生成 Markdown 檔案: {md_file}\n"
+                        f"成功分析 {analyzed_count} 張圖片"
+                    )
+                else:
+                    messagebox.showinfo(
+                        "成功", 
+                        f"已生成 Markdown 檔案: {md_file}\n"
+                        f"（注意：MarkItDown 無法處理純圖片檔案，"
+                        f"但已使用 {provider.upper()} 視覺模型進行分析）"
+                    )
             else:
                 msg = (
                     f"生成 Markdown 時出現問題: "

@@ -21,18 +21,29 @@ echo "✅ Python 版本："
 python3 --version
 echo ""
 
-# 檢查並創建虛擬環境（可選）
-if [ "$1" == "--venv" ]; then
-    echo "📦 創建虛擬環境..."
-    if [ ! -d "venv" ]; then
-        python3 -m venv venv
+# 自動創建並使用虛擬環境（避免 externally-managed-environment 錯誤）
+echo "📦 檢查虛擬環境..."
+if [ ! -d "venv" ]; then
+    echo "🔄 創建虛擬環境..."
+    python3 -m venv venv
+    if [ $? -eq 0 ]; then
         echo "✅ 虛擬環境創建成功"
+    else
+        echo "❌ 虛擬環境創建失敗"
+        exit 1
     fi
-    
-    # 啟動虛擬環境
-    echo "🔄 啟動虛擬環境..."
-    source venv/bin/activate
+else
+    echo "✅ 虛擬環境已存在"
 fi
+
+# 啟動虛擬環境
+echo "🔄 啟動虛擬環境..."
+source venv/bin/activate
+
+# 確認使用的是虛擬環境的 Python
+echo "📍 當前 Python 路徑："
+which python3
+echo ""
 
 # 檢查必要的依賴套件
 echo "🔍 檢查依賴套件..."
@@ -71,12 +82,14 @@ if [ ${#MISSING_PACKAGES[@]} -gt 0 ]; then
         if [ $? -eq 0 ]; then
             echo "✅ 所有套件安裝成功！"
         else
-            echo "❌ 套件安裝失敗，請手動安裝："
-            echo "python3 -m pip install ${MISSING_PACKAGES[@]}"
+            echo "❌ 套件安裝失敗，請檢查錯誤訊息"
             exit 1
         fi
     else
         echo "⚠️  請手動安裝缺少的套件後再執行"
+        echo "執行以下命令："
+        echo "source venv/bin/activate"
+        echo "python3 -m pip install ${MISSING_PACKAGES[@]}"
         exit 1
     fi
 else
@@ -124,7 +137,5 @@ echo ""
 # 執行主程式
 python3 video_audio_processor.py
 
-# 如果使用虛擬環境，退出時關閉
-if [ "$1" == "--venv" ]; then
-    deactivate
-fi 
+# 退出虛擬環境
+deactivate 
