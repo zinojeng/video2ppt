@@ -505,11 +505,31 @@ def generate_ppt_from_images(image_folder, output_file=None, title="視頻捕獲
         if image_files is None:
             image_files = []
             for filename in sorted(os.listdir(image_folder)):
-                if filename.lower().endswith(('.png', '.jpg', '.jpeg')):
+                # 過濾 macOS 資源檔案和隱藏檔案
+                if (filename.lower().endswith(('.png', '.jpg', '.jpeg')) and 
+                    not filename.startswith('._') and not filename.startswith('.')):
                     image_files.append(os.path.join(image_folder, filename))
                 
         if not image_files:
             return False, "未找到圖片文件"
+            
+        # 驗證並過濾圖片文件列表
+        valid_image_files = []
+        for img_item in image_files:
+            # 檢查是否為有效的文件路徑字符串
+            if isinstance(img_item, str) and os.path.isfile(img_item):
+                # 過濾 macOS 資源檔案
+                filename = os.path.basename(img_item)
+                if not filename.startswith('._') and not filename.startswith('.'):
+                    valid_image_files.append(img_item)
+            elif not isinstance(img_item, str):
+                print(f"警告: 跳過非文件路徑物件: {type(img_item)}")
+        
+        if not valid_image_files:
+            return False, "未找到有效的圖片文件"
+            
+        image_files = valid_image_files
+        print(f"準備處理 {len(image_files)} 張圖片")
             
         # 添加標題幻燈片
         title_slide_layout = prs.slide_layouts[0]  # 標題布局
@@ -523,13 +543,19 @@ def generate_ppt_from_images(image_folder, output_file=None, title="視頻捕獲
         blank_slide_layout = prs.slide_layouts[6]  # 空白布局
         
         for img_path in image_files:
-            slide = prs.slides.add_slide(blank_slide_layout)
-            
-            # 添加圖片
-            left = top = Inches(0)
-            slide.shapes.add_picture(
-                img_path, left, top, width=slide_width, height=slide_height
-            )
+            try:
+                slide = prs.slides.add_slide(blank_slide_layout)
+                
+                # 添加圖片
+                left = top = Inches(0)
+                slide.shapes.add_picture(
+                    img_path, left, top, width=slide_width, height=slide_height
+                )
+                print(f"成功添加圖片: {os.path.basename(img_path)}")
+            except Exception as img_error:
+                print(f"錯誤: 添加圖片失敗 {img_path}: {img_error}")
+                # 繼續處理其他圖片，不中斷整個流程
+                continue
             
         # 保存演示文稿
         prs.save(output_file)

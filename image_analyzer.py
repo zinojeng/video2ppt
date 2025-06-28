@@ -166,7 +166,17 @@ def analyze_image(
                 logger.info(f"使用 Gemini 模型: {model_name}")
                 
                 # 加載圖片
-                img = Image.open(image_path)
+                try:
+                    if isinstance(image_path, (str, bytes)):
+                        img = Image.open(image_path)
+                    else:
+                        # 如果是 BytesIO 對象，重置指針位置
+                        if hasattr(image_path, 'seek'):
+                            image_path.seek(0)
+                        img = Image.open(image_path)
+                except Exception as e:
+                    logger.error(f"無法識別圖片格式: {e}")
+                    return ""
                 
                 # 設定 Gemini 模型和安全配置
                 generation_config = {
